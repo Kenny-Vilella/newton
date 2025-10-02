@@ -13,13 +13,7 @@ env:
 
 on:
   merge_group:
-  pull_request_target:
-
-# Cancels in-progress runs of this workflow for the same pull request,
-# but allows parallel runs for pushes to the main branch.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref }}
-  cancel-in-progress: true
+  pull_request:
 
 jobs:
   check-author-membership:
@@ -64,7 +58,6 @@ jobs:
 
   aws-gpu-benchmarks-pr:
     name: Run GPU Benchmarks (Pull Request)
-    if: github.repository == 'newton-physics/newton'
     needs: check-author-membership
     environment:
       name: ${{ needs.check-author-membership.outputs.membership_status != 'CONFIRMED_MEMBER' && 'external-pr-approval' || '' }}
@@ -149,11 +142,14 @@ jobs:
           set -euo pipefail
 
           echo "--- Starting sequence on EC2 instance ---"
+
           date
 
           # These are expanded immediately on the GitHub runner
           REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
           REPO_DIR="${{ github.event.repository.name }}"
+
+          date
 
           curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/tmp/uv-installation" sh
           source /tmp/uv-installation/env
@@ -176,12 +172,19 @@ jobs:
           HEAD_SHA=\$(git rev-parse HEAD)
           echo "Checked out commit SHA: \${HEAD_SHA}"
 
+          date
+
           echo "Running Newton benchmarks..."
           uv venv
           source .venv/bin/activate
           uv pip install asv virtualenv
           asv machine --yes
-          asv continuous --launch-method spawn --interleave-rounds --append-samples --no-only-changed -e -b Fast ${{ github.event.pull_request.base.sha }} \$HEAD_SHA 2>&1 || (asv compare --split ${{ github.event.pull_request.base.sha }} \$HEAD_SHA 2>&1 && exit 2)
+
+          date
+
+          time asv run --launch-method spawn -b Fast ${{ github.event.pull_request.base.sha }} 2>&1
+
+          date
           EOF
 
           # Prepare script to be passed as SSM parameters
@@ -286,7 +289,6 @@ jobs:
     name: Cleanup EC2 Instance
     runs-on: ubuntu-latest
     needs: aws-gpu-benchmarks-pr
-    if: always() && github.repository == 'newton-physics/newton'
     permissions:
       id-token: write
       contents: read
