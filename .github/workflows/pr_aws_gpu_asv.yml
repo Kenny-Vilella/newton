@@ -143,13 +143,9 @@ jobs:
 
           echo "--- Starting sequence on EC2 instance ---"
 
-          date
-
           # These are expanded immediately on the GitHub runner
           REPO_URL="${{ github.server_url }}/${{ github.repository }}.git"
           REPO_DIR="${{ github.event.repository.name }}"
-
-          date
 
           curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/tmp/uv-installation" sh
           source /tmp/uv-installation/env
@@ -172,8 +168,6 @@ jobs:
           HEAD_SHA=\$(git rev-parse HEAD)
           echo "Checked out commit SHA: \${HEAD_SHA}"
 
-          date
-
           echo "Running Newton benchmarks..."
           uv venv
           source .venv/bin/activate
@@ -182,7 +176,8 @@ jobs:
 
           date
 
-          time asv run --launch-method spawn -b Fast ${{ github.event.pull_request.base.sha }}^! 2>&1
+          time asv continuous --launch-method spawn --interleave-rounds --append-samples --no-only-changed -e -b Fast ${{ github.event.pull_request.base.sha }} \$HEAD_SHA 2>&1
+          #time asv run --launch-method spawn -b Fast ${{ github.event.pull_request.base.sha }}^! 2>&1
 
           date
           EOF
