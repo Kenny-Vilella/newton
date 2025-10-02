@@ -182,7 +182,7 @@ jobs:
 
           date
 
-          time asv run --launch-method spawn -b Fast ${{ github.event.pull_request.base.sha }} 2>&1
+          time asv run --launch-method spawn -b Fast ${{ github.event.pull_request.base.sha }}^! 2>&1
 
           date
           EOF
