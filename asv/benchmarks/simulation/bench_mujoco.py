@@ -25,79 +25,6 @@ from asv_runner.benchmarks.mark import skip_benchmark_if
 from newton.examples.example_mujoco import Example
 
 
-class FastAnt:
-    num_frames = 50
-    robot = "ant"
-    number = 1
-    repeat = 8
-    rounds = 2
-    num_envs = 256
-
-    def setup(self):
-        if not hasattr(self, "builder") or self.builder is None:
-            self.builder = Example.create_model_builder(self.robot, self.num_envs, randomize=True, seed=123)
-
-        self.example = Example(
-            stage_path=None,
-            robot=self.robot,
-            randomize=True,
-            headless=True,
-            actuation="random",
-            num_envs=self.num_envs,
-            use_cuda_graph=True,
-            builder=self.builder,
-        )
-
-        wp.synchronize_device()
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def time_simulate(self):
-        for _ in range(self.num_frames):
-            self.example.step()
-        wp.synchronize_device()
-
-
-class KpiAnt:
-    params = [4096, 8192, 16384]
-    param_names = ["num_envs"]
-    num_frames = 100
-    robot = "ant"
-    samples = 4
-
-    def setup(self, num_envs):
-        if not hasattr(self, "builder") or self.builder is None:
-            self.builder = {}
-        if num_envs not in self.builder:
-            self.builder[num_envs] = Example.create_model_builder(self.robot, num_envs, randomize=True, seed=123)
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_simulate(self, num_envs):
-        total_time = 0.0
-        for _iter in range(self.samples):
-            example = Example(
-                stage_path=None,
-                robot=self.robot,
-                randomize=True,
-                headless=True,
-                actuation="random",
-                num_envs=num_envs,
-                use_cuda_graph=True,
-                builder=self.builder[num_envs],
-                ls_iteration=10,
-            )
-
-            wp.synchronize_device()
-            start_time = time.time()
-            for _ in range(self.num_frames):
-                example.step()
-            wp.synchronize_device()
-            total_time += time.time() - start_time
-
-        return total_time * 1000 / (self.num_frames * example.sim_substeps * num_envs * self.samples)
-
-    track_simulate.unit = "ms/env-step"
-
-
 class FastCartpole:
     num_frames = 50
     robot = "cartpole"
@@ -245,80 +172,6 @@ class KpiG1:
     track_simulate.unit = "ms/env-step"
 
 
-class FastH1:
-    num_frames = 25
-    robot = "h1"
-    number = 1
-    repeat = 2
-    rounds = 2
-    num_envs = 256
-
-    def setup(self):
-        if not hasattr(self, "builder") or self.builder is None:
-            self.builder = Example.create_model_builder(self.robot, self.num_envs, randomize=True, seed=123)
-
-        self.example = Example(
-            stage_path=None,
-            robot=self.robot,
-            randomize=True,
-            headless=True,
-            actuation="random",
-            num_envs=self.num_envs,
-            use_cuda_graph=True,
-            builder=self.builder,
-        )
-
-        wp.synchronize_device()
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def time_simulate(self):
-        for _ in range(self.num_frames):
-            self.example.step()
-        wp.synchronize_device()
-
-
-class KpiH1:
-    params = [4096, 8192]
-    param_names = ["num_envs"]
-    num_frames = 50
-    robot = "h1"
-    timeout = 900
-    samples = 2
-
-    def setup(self, num_envs):
-        if not hasattr(self, "builder") or self.builder is None:
-            self.builder = {}
-        if num_envs not in self.builder:
-            self.builder[num_envs] = Example.create_model_builder(self.robot, num_envs, randomize=True, seed=123)
-
-    @skip_benchmark_if(wp.get_cuda_device_count() == 0)
-    def track_simulate(self, num_envs):
-        total_time = 0.0
-        for _iter in range(self.samples):
-            example = Example(
-                stage_path=None,
-                robot=self.robot,
-                randomize=True,
-                headless=True,
-                actuation="random",
-                num_envs=num_envs,
-                use_cuda_graph=True,
-                builder=self.builder[num_envs],
-                ls_iteration=10,
-            )
-
-            wp.synchronize_device()
-            start_time = time.time()
-            for _ in range(self.num_frames):
-                example.step()
-            wp.synchronize_device()
-            total_time += time.time() - start_time
-
-        return total_time * 1000 / (self.num_frames * example.sim_substeps * num_envs * self.samples)
-
-    track_simulate.unit = "ms/env-step"
-
-
 class FastHumanoid:
     num_frames = 50
     robot = "humanoid"
@@ -398,15 +251,11 @@ if __name__ == "__main__":
     from newton.utils import run_benchmark
 
     benchmark_list = {
-        "FastAnt": FastAnt,
         "FastCartpole": FastCartpole,
         "FastG1": FastG1,
-        "FastH1": FastH1,
         "FastHumanoid": FastHumanoid,
-        "KpiAnt": KpiAnt,
         "KpiCartpole": KpiCartpole,
         "KpiG1": KpiG1,
-        "KpiH1": KpiH1,
         "KpiHumanoid": KpiHumanoid,
     }
 
