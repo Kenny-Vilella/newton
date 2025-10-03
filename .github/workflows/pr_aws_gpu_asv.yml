@@ -3,7 +3,7 @@ name: GPU Benchmarks
 # Workflow configuration variables
 env:
   AWS_REGION: us-east-2
-  AWS_INSTANCE_TYPE: g6e.4xlarge
+  AWS_INSTANCE_TYPE: g5.2xlarge
   AWS_VOLUME_SIZE: 64
   AWS_VOLUME_TYPE: gp3
   AWS_SECURITY_GROUP_IDS: sg-07807c44e7f2a368a
@@ -177,8 +177,8 @@ jobs:
 
           date
 
-          time asv continuous --launch-method spawn --interleave-rounds --append-samples --no-only-changed -e -b Fast ${{ github.event.pull_request.base.sha }} \$HEAD_SHA 2>&1
-          #time asv run --launch-method spawn -b Fast ${{ github.event.pull_request.base.sha }}^! 2>&1
+          #time asv continuous --launch-method spawn --interleave-rounds --append-samples --no-only-changed -e -b Fast ${{ github.event.pull_request.base.sha }} \$HEAD_SHA 2>&1
+          time asv run --durations all --launch-method spawn -b Fast ${{ github.event.pull_request.base.sha }}^! 2>&1
 
           date
           EOF
