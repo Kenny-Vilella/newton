@@ -15,10 +15,6 @@
 
 import gc
 
-# Set pyglet to headless mode before any imports that use it
-import pyglet
-pyglet.options["headless"] = True
-
 import warp as wp
 
 wp.config.enable_backward = False
@@ -27,7 +23,7 @@ wp.config.quiet = True
 from asv_runner.benchmarks.mark import skip_benchmark_if
 
 from newton.examples.example_mujoco import Example
-from newton.viewer import ViewerGL, ViewerNull
+from newton.viewer import ViewerGL
 
 
 class KpiInitializeModel:
