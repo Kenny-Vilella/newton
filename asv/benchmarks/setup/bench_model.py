@@ -14,6 +14,14 @@
 # limitations under the License.
 
 import gc
+import os
+
+# Force headless mode for CI environments before any pyglet imports
+os.environ["PYGLET_HEADLESS"] = "1"
+
+# Also set pyglet headless mode programmatically
+import pyglet
+pyglet.options["headless"] = True
 
 import warp as wp
 
@@ -23,7 +31,6 @@ wp.config.quiet = True
 from asv_runner.benchmarks.mark import skip_benchmark_if
 
 from newton.examples.example_mujoco import Example
-from newton.viewer import ViewerGL
 
 
 class KpiInitializeModel:
@@ -95,6 +102,9 @@ class KpiInitializeRender:
 
     @skip_benchmark_if(wp.get_cuda_device_count() == 0)
     def time_initialize_renderer(self, robot, num_envs):
+        # Import ViewerGL locally to ensure headless options are set first
+        from newton.viewer import ViewerGL
+        
         # Setting up the renderer (ViewerGL in headless mode)
         self.renderer = ViewerGL(headless=True)
         self.renderer.set_model(self._model)
@@ -192,6 +202,9 @@ class FastInitializeRender:
 
     @skip_benchmark_if(wp.get_cuda_device_count() == 0)
     def time_initialize_renderer(self, robot, num_envs):
+        # Import ViewerGL locally to ensure headless options are set first
+        from newton.viewer import ViewerGL
+        
         # Setting up the renderer (ViewerGL in headless mode)
         self.renderer = ViewerGL(headless=True)
         self.renderer.set_model(self._model)
