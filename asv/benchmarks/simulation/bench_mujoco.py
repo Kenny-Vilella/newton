@@ -226,6 +226,122 @@ class KpiG1(_KpiBenchmark):
     random_init = True
     environment = "None"
 
+class FastH1(_FastBenchmark):
+    num_frames = 50
+    robot = "h1"
+    repeat = 2
+    num_worlds = 512
+    random_init = True
+    environment = "None"
+
+
+class KpiH1(_KpiBenchmark):
+    params = [[8192]]
+    num_frames = 50
+    robot = "h1"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "None"
+
+
+class FastBooster(_FastBenchmark):
+    num_frames = 50
+    robot = "booster"
+    repeat = 2
+    num_worlds = 512
+    random_init = True
+    environment = "None"
+
+
+class KpiBooster(_KpiBenchmark):
+    params = [[8192]]
+    num_frames = 50
+    robot = "booster"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "None"
+
+
+class FastN1(_FastBenchmark):
+    num_frames = 50
+    robot = "n1"
+    repeat = 2
+    num_worlds = 512
+    random_init = True
+    environment = "None"
+
+
+class KpiN1(_KpiBenchmark):
+    params = [[8192]]
+    num_frames = 50
+    robot = "n1"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "None"
+
+class FastAdam(_FastBenchmark):
+    num_frames = 50
+    robot = "adam"
+    repeat = 2
+    num_worlds = 512
+    random_init = True
+    environment = "None"
+
+
+class KpiAdam(_KpiBenchmark):
+    params = [[8192]]
+    num_frames = 50
+    robot = "adam"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "None"
+
+class FastTalos(_FastBenchmark):
+    num_frames = 50
+    robot = "talos"
+    repeat = 2
+    num_worlds = 1
+    random_init = True
+    environment = "None"
+
+
+class KpiTalos(_KpiBenchmark):
+    params = [[8192]]
+    num_frames = 50
+    robot = "talos"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "None"
+
+class FastApollo(_FastBenchmark):
+    num_frames = 50
+    robot = "apollo"
+    repeat = 2
+    num_worlds = 512
+    random_init = True
+    environment = "None"
+
+
+class KpiApollo(_KpiBenchmark):
+    params = [[8192]]
+    num_frames = 50
+    robot = "apollo"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "None"
+
 
 class FastNewtonOverheadG1(_NewtonOverheadBenchmark):
     params = [[256]]
@@ -263,6 +379,36 @@ class KpiHumanoid(_KpiBenchmark):
     ls_iteration = 15
     random_init = True
     environment = "None"
+
+
+class Fast3Ants(_FastBenchmark):
+    num_frames = 50
+    robot = "3ants"
+    repeat = 8
+    num_worlds = 512
+    random_init = False
+    environment = "None"
+
+
+class Kpi3Ants(_KpiBenchmark):
+    params = [[8192]]
+    num_frames = 100
+    robot = "3ants"
+    samples = 4
+    ls_iteration = 15
+    random_init = False
+    environment = "None"
+
+
+class KpiKitchen3Ants(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 50
+    robot = "3ants"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = False
+    environment = "kitchen"
 
 
 class FastNewtonOverheadHumanoid(_NewtonOverheadBenchmark):
@@ -322,6 +468,142 @@ class KpiKitchenG1(_KpiBenchmark):
     environment = "kitchen"
 
 
+class FastKitchenH1(_FastBenchmark):
+    num_frames = 25
+    robot = "h1"
+    repeat = 2
+    num_worlds = 32
+    random_init = True
+    environment = "kitchen"
+
+
+class KpiKitchenH1(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 50
+    robot = "h1"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "kitchen"
+
+
+class FastKitchenHumanoid(_FastBenchmark):
+    num_frames = 25
+    robot = "humanoid"
+    repeat = 2
+    num_worlds = 32
+    random_init = True
+    environment = "kitchen"
+
+
+class KpiKitchenHumanoid(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 50
+    robot = "humanoid"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "kitchen"
+
+
+class FastKitchenBooster(_FastBenchmark):
+    num_frames = 25
+    robot = "booster"
+    repeat = 2
+    num_worlds = 32
+    random_init = True
+    environment = "kitchen"
+
+
+class KpiKitchenBooster(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 50
+    robot = "booster"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "kitchen"
+
+
+class FastKitchenN1(_FastBenchmark):
+    num_frames = 25
+    robot = "n1"
+    repeat = 2
+    num_worlds = 32
+    random_init = True
+    environment = "kitchen"
+
+
+class KpiKitchenN1(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 50
+    robot = "n1"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "kitchen"
+
+class FastKitchenTalos(_FastBenchmark):
+    num_frames = 25
+    robot = "talos"
+    repeat = 2
+    num_worlds = 32
+    random_init = True
+    environment = "kitchen"
+
+
+class KpiKitchenTalos(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 50
+    robot = "talos"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "kitchen"
+
+class FastKitchenAdam(_FastBenchmark):
+    num_frames = 25
+    robot = "adam"
+    repeat = 2
+    num_worlds = 32
+    random_init = True
+    environment = "kitchen"
+
+
+class KpiKitchenAdam(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 50
+    robot = "adam"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "kitchen"
+
+class FastKitchenApollo(_FastBenchmark):
+    num_frames = 25
+    robot = "apollo"
+    repeat = 2
+    num_worlds = 32
+    random_init = True
+    environment = "kitchen"
+
+
+class KpiKitchenApollo(_KpiBenchmark):
+    params = [[512]]
+    num_frames = 100
+    robot = "apollo"
+    timeout = 900
+    samples = 2
+    ls_iteration = 10
+    random_init = True
+    environment = "kitchen"
+
 if __name__ == "__main__":
     import argparse
 
@@ -342,6 +624,35 @@ if __name__ == "__main__":
         "KpiKitchenG1": KpiKitchenG1,
         "KpiNewtonOverheadG1": KpiNewtonOverheadG1,
         "KpiNewtonOverheadHumanoid": KpiNewtonOverheadHumanoid,
+        "KpiKitchenHumanoid": KpiKitchenHumanoid,
+        "FastKitchenHumanoid": FastKitchenHumanoid,
+        "KpiKitchenH1": KpiKitchenH1,
+        "FastKitchenH1": FastKitchenH1,
+        "KpiH1": KpiH1,
+        "FastH1": FastH1,
+        "KpiKitchenBooster": KpiKitchenBooster,
+        "FastKitchenBooster": FastKitchenBooster,
+        "KpiKitchenN1": KpiKitchenN1,
+        "FastKitchenN1": FastKitchenN1,
+        "KpiKitchenTalos": KpiKitchenTalos,
+        "FastKitchenTalos": FastKitchenTalos,
+        "KpiKitchenAdam": KpiKitchenAdam,
+        "FastKitchenAdam": FastKitchenAdam,
+        "KpiKitchenApollo": KpiKitchenApollo,
+        "FastKitchenApollo": FastKitchenApollo,
+        "KpiBooster": KpiBooster,
+        "FastBooster": FastBooster,
+        "KpiN1": KpiN1,
+        "FastN1": FastN1,
+        "KpiAdam": KpiAdam,
+        "FastAdam": FastAdam,
+        "KpiTalos": KpiTalos,
+        "FastTalos": FastTalos,
+        "KpiApollo": KpiApollo,
+        "FastApollo": FastApollo,
+        "Kpi3Ants": Kpi3Ants,
+        "KpiKitchen3Ants": KpiKitchen3Ants,
+        "Fast3Ants": Fast3Ants,
     }
 
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)

@@ -34,6 +34,8 @@ import newton.examples
 import newton.utils
 from newton.utils import EventTracer
 
+MENAGERIE_PATH = "/home/name/mujoco_menagerie/"
+
 ROBOT_CONFIGS = {
     "humanoid": {
         "solver": "newton",
@@ -91,12 +93,133 @@ ROBOT_CONFIGS = {
         "ls_parallel": True,
         "cone": "elliptic",
     },
+   "booster": {
+        "solver": "newton",
+        "integrator": "implicitfast",
+        "njmax": 30,
+        "nconmax": 15,
+        "ls_parallel": True,
+        "cone": "pyramidal",
+    },
+   "n1": {
+        "solver": "newton",
+        "integrator": "implicitfast",
+        "njmax": 30,
+        "nconmax": 25,
+        "ls_parallel": True,
+        "cone": "pyramidal",
+    },
+   "adam": {
+        "solver": "newton",
+        "integrator": "implicitfast",
+        "njmax": 30,
+        "nconmax": 15,
+        "ls_parallel": True,
+        "cone": "pyramidal",
+    },
+   "apollo": {
+        "solver": "newton",
+        "integrator": "implicitfast",
+        "njmax": 30,
+        "nconmax": 25,
+        "ls_parallel": True,
+        "cone": "pyramidal",
+    },
+   "talos": {
+        "solver": "newton",
+        "integrator": "implicitfast",
+        "njmax": 60,
+        "nconmax": 55,
+        "ls_parallel": True,
+        "cone": "pyramidal",
+    },
+    "3ants": {
+        "solver": "newton",
+        "integrator": "implicitfast",
+        "njmax": 170,
+        "nconmax": 45,
+        "ls_parallel": True,
+        "cone": "pyramidal",
+    },
     "kitchen": {
         "setup_builder": lambda x: _setup_kitchen(x),
         "njmax": 3800,
         "nconmax": 900,
     },
 }
+
+
+def _setup_adam(articulation_builder):
+    asset_file = MENAGERIE_PATH + "pndbotics_adam_lite/adam_lite.xml"
+    articulation_builder.add_mjcf(
+        asset_file,
+        ignore_names=["floor", "ground"],
+        up_axis="Z",
+    )
+
+    # Setting root pose
+    root_dofs = 7
+    articulation_builder.joint_q[:3] = [0.0, 0.0, 1.2]
+
+    return root_dofs
+
+def _setup_apollo(articulation_builder):
+    asset_file = MENAGERIE_PATH + "apptronik_apollo/apptronik_apollo.xml"
+    articulation_builder.add_mjcf(
+        asset_file,
+        ignore_names=["floor", "ground"],
+        up_axis="Z",
+    )
+
+    # Setting root pose
+    root_dofs = 7
+    articulation_builder.joint_q[:3] = [0.0, 0.0, 1.5]
+
+    return root_dofs
+
+def _setup_talos(articulation_builder):
+    asset_file = MENAGERIE_PATH + "pal_talos/talos.xml"
+    articulation_builder.add_mjcf(
+        asset_file,
+        ignore_names=["floor", "ground"],
+        up_axis="Z",
+    )
+
+    # Setting root pose
+    root_dofs = 7
+    articulation_builder.joint_q[:3] = [0.0, 0.0, 1.5]
+
+    return root_dofs
+
+
+def _setup_n1(articulation_builder):
+    asset_file = MENAGERIE_PATH + "fourier_n1/n1.xml"
+    articulation_builder.add_mjcf(
+        asset_file,
+        ignore_names=["floor", "ground"],
+        up_axis="Z",
+    )
+
+    # Setting root pose
+    root_dofs = 7
+    articulation_builder.joint_q[:3] = [0.0, 0.0, 1.1]
+
+    return root_dofs
+
+
+def _setup_booster(articulation_builder):
+    asset_file = MENAGERIE_PATH + "booster_t1/t1.xml"
+    articulation_builder.add_mjcf(
+        asset_file,
+        ignore_names=["floor", "ground"],
+        up_axis="Z",
+    )
+
+    # Setting root pose
+    root_dofs = 7
+    articulation_builder.joint_q[:3] = [0.0, 0.0, 1.0]
+
+    return root_dofs
 
 
 def _setup_humanoid(articulation_builder):
@@ -109,6 +232,29 @@ def _setup_humanoid(articulation_builder):
     # Setting root pose
     root_dofs = 7
     articulation_builder.joint_q[:3] = [0.0, 0.0, 1.5]
+
+    return root_dofs
+
+
+def _setup_3ants(articulation_builder):
+    articulation_builder.add_usd(
+        newton.examples.get_asset("ant.usda"),
+        collapse_fixed_joints=True,
+        xform=wp.transform(wp.vec3(0, 0, 0.5)),
+    )
+    articulation_builder.add_usd(
+        newton.examples.get_asset("ant.usda"),
+        collapse_fixed_joints=True,
+        xform=wp.transform(wp.vec3(0, 0.0, 1.5)),
+    )
+    articulation_builder.add_usd(
+        newton.examples.get_asset("ant.usda"),
+        collapse_fixed_joints=True,
+        xform=wp.transform(wp.vec3(0, 0, 2.5)),
+    )
+
+    # Setting root pose
+    root_dofs = 7
 
     return root_dofs
 
@@ -323,6 +469,9 @@ class Example:
             cone=cone,
         )
 
+        # Change that !
+        self.solver.mjw_model.opt.is_sparse = False
+
         if stage_path and not headless:
             self.renderer = newton.viewer.ViewerGL()
             self.renderer.set_model(self.model)
@@ -395,6 +544,18 @@ class Example:
             root_dofs = _setup_quadruped(articulation_builder)
         elif robot == "allegro":
             root_dofs = _setup_allegro(articulation_builder)
+        elif robot == "booster":
+            root_dofs = _setup_booster(articulation_builder)
+        elif robot == "n1":
+            root_dofs = _setup_n1(articulation_builder)
+        elif robot == "adam":
+            root_dofs = _setup_adam(articulation_builder)
+        elif robot == "talos":
+            root_dofs = _setup_talos(articulation_builder)
+        elif robot == "apollo":
+            root_dofs = _setup_apollo(articulation_builder)
+        elif robot == "3ants":
+            root_dofs = _setup_3ants(articulation_builder)
         else:
             raise ValueError(f"Name of the provided robot not recognized: {robot}")
 
