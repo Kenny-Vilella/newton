@@ -104,6 +104,7 @@ class _KpiBenchmark:
     ls_iteration = None
     random_init = None
     environment = "None"
+    skip_benchmark = None
 
     def setup(self, num_worlds):
         if not hasattr(self, "builder") or self.builder is None:
@@ -300,6 +301,11 @@ class KpiAllegro(_KpiBenchmark):
     ls_iteration = 10
     random_init = False
     environment = "None"
+    skip_benchmark = os.getenv("ASV_RUN_OPTIONAL", "0") == "0"
+
+    @skip_benchmark_if(skip_benchmark)
+    def track_simulate(self, num_worlds):
+        return super().track_simulate(num_worlds)
 
 
 class FastKitchenG1(_FastBenchmark):
