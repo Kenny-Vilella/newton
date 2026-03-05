@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="../../_static/documentation_options.js?v=938c9ccc"></script>
+    <script src="../../_static/documentation_options.js?v=1c471e8e"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -132,7 +132,7 @@
     <img src="../../_static/newton-logo-dark.png" class="logo__image only-dark pst-js-only" alt="Newton Physics Logo"/>
   
   
-    <p class="title logo__title">Newton Physics <span style='font-size: 0.8em; color: #888;'>(0.2.0)</span></p>
+    <p class="title logo__title">Newton Physics <span style='font-size: 0.8em; color: #888;'>(1.1.0.dev0)</span></p>
   
 </a></div>
     
@@ -811,7 +811,7 @@
 <h1>newton.solvers.SolverNotifyFlags<a class="headerlink" href="#newton-solvers-solvernotifyflags" title="Link to this heading">#</a></h1>
 <dl class="py class">
 <dt class="sig sig-object py" id="newton.solvers.SolverNotifyFlags">
-<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">newton.solvers.</span></span><span class="sig-name descname"><span class="pre">SolverNotifyFlags</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/newton-physics/newton/blob/main/newton/_src/solvers/flags.py#L22"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#newton.solvers.SolverNotifyFlags" title="Link to this definition">#</a></dt>
+<em class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">newton.solvers.</span></span><span class="sig-name descname"><span class="pre">SolverNotifyFlags</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">values</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/newton-physics/newton/blob/main/newton/_src/solvers/flags.py#L22"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#newton.solvers.SolverNotifyFlags" title="Link to this definition">#</a></dt>
 <dd><p>Bases: <a class="reference external" href="https://docs.python.org/3/library/enum.html#enum.IntEnum" title="(in Python v3.14)"><code class="xref py py-class docutils literal notranslate"><span class="pre">IntEnum</span></code></a></p>
 <p>Flags indicating which parts of the model have been updated and require the solver to be notified.</p>
 <p>These flags are used with <cite>solver.notify_model_update()</cite> to specify which properties have changed,
@@ -856,12 +856,12 @@ allowing the solver to efficiently update only the necessary components.</p>
 </dd></dl>
 
 <dl class="py attribute">
-<dt class="sig sig-object py" id="newton.solvers.SolverNotifyFlags.EQUALITY_CONSTRAINT_PROPERTIES">
-<span class="sig-name descname"><span class="pre">EQUALITY_CONSTRAINT_PROPERTIES</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">64</span></em><a class="headerlink" href="#newton.solvers.SolverNotifyFlags.EQUALITY_CONSTRAINT_PROPERTIES" title="Link to this definition">#</a></dt>
-<dd><p>equality_constraint_anchor, equality_constraint_relpose, equality_constraint_polycoef, equality_constraint_torquescale, equality_constraint_enabled, and mujoco.eq_solref, mujoco.eq_solimp custom attributes.</p>
+<dt class="sig sig-object py" id="newton.solvers.SolverNotifyFlags.CONSTRAINT_PROPERTIES">
+<span class="sig-name descname"><span class="pre">CONSTRAINT_PROPERTIES</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">64</span></em><a class="headerlink" href="#newton.solvers.SolverNotifyFlags.CONSTRAINT_PROPERTIES" title="Link to this definition">#</a></dt>
+<dd><p>equality constraints (equality_constraint_anchor, equality_constraint_relpose, equality_constraint_polycoef, equality_constraint_torquescale, equality_constraint_enabled, mujoco.eq_solref, mujoco.eq_solimp) and mimic constraints (constraint_mimic_coef0, constraint_mimic_coef1, constraint_mimic_enabled).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>Indicates equality constraint property updates</p>
+<dd class="field-odd"><p>Indicates constraint property updates</p>
 </dd>
 </dl>
 </dd></dl>
@@ -902,7 +902,7 @@ allowing the solver to efficiently update only the necessary components.</p>
 <dl class="py attribute">
 <dt class="sig sig-object py" id="newton.solvers.SolverNotifyFlags.SHAPE_PROPERTIES">
 <span class="sig-name descname"><span class="pre">SHAPE_PROPERTIES</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">16</span></em><a class="headerlink" href="#newton.solvers.SolverNotifyFlags.SHAPE_PROPERTIES" title="Link to this definition">#</a></dt>
-<dd><p>shape_transform, shape_scale, shape_collision_radius, shape_material_mu, shape_material_ke, shape_material_kd, rigid_contact_torsional_friction, rigid_contact_rolling_friction.</p>
+<dd><p>shape_transform, shape_scale, shape_collision_radius, shape_material_mu, shape_material_ke, shape_material_kd, rigid_contact_mu_torsional, rigid_contact_mu_rolling.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Type<span class="colon">:</span></dt>
 <dd class="field-odd"><p>Indicates shape property updates</p>
@@ -953,7 +953,7 @@ allowing the solver to efficiently update only the necessary components.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.ALL"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.ALL</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.BODY_INERTIAL_PROPERTIES"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.BODY_INERTIAL_PROPERTIES</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.BODY_PROPERTIES"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.BODY_PROPERTIES</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.EQUALITY_CONSTRAINT_PROPERTIES"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.EQUALITY_CONSTRAINT_PROPERTIES</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.CONSTRAINT_PROPERTIES"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.CONSTRAINT_PROPERTIES</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.JOINT_DOF_PROPERTIES"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.JOINT_DOF_PROPERTIES</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.JOINT_PROPERTIES"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.JOINT_PROPERTIES</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newton.solvers.SolverNotifyFlags.MODEL_PROPERTIES"><code class="docutils literal notranslate"><span class="pre">SolverNotifyFlags.MODEL_PROPERTIES</span></code></a></li>
@@ -989,17 +989,9 @@ allowing the solver to efficiently update only the necessary components.</p>
 
   <p class="copyright">
     
-      © Copyright 2026, The Newton Developers.
+      © Copyright 2026, The Newton Developers. Documentation licensed under CC-BY-4.0.
       <br/>
     
-  </p>
-</div>
-      
-        <div class="footer-item">
-
-  <p class="sphinx-version">
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
-    <br/>
   </p>
 </div>
       

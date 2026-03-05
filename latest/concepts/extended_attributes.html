@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="../_static/documentation_options.js?v=938c9ccc"></script>
+    <script src="../_static/documentation_options.js?v=1c471e8e"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -132,7 +132,7 @@
     <img src="../_static/newton-logo-dark.png" class="logo__image only-dark pst-js-only" alt="Newton Physics Logo"/>
   
   
-    <p class="title logo__title">Newton Physics <span style='font-size: 0.8em; color: #888;'>(0.2.0)</span></p>
+    <p class="title logo__title">Newton Physics <span style='font-size: 0.8em; color: #888;'>(1.1.0.dev0)</span></p>
   
 </a></div>
     
@@ -870,6 +870,10 @@ Request them via <a class="reference internal" href="../api/_generated/newton.Mo
 <tr class="row-odd"><td><p><a class="reference internal" href="../api/_generated/newton.State.html#newton.State.body_parent_f" title="newton.State.body_parent_f"><code class="xref py py-attr docutils literal notranslate"><span class="pre">body_parent_f</span></code></a></p></td>
 <td><p>Rigid-body parent interaction wrenches</p></td>
 </tr>
+<tr class="row-even"><td><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">qfrc_actuator</span></code></p></td>
+<td><p>Actuator forces in generalized (joint DOF) coordinates, namespaced under <code class="docutils literal notranslate"><span class="pre">state.mujoco.qfrc_actuator</span></code>.
+Only populated by <a class="reference internal" href="../api/_generated/newton.solvers.SolverMuJoCo.html#newton.solvers.SolverMuJoCo" title="newton.solvers.SolverMuJoCo"><code class="xref py py-class docutils literal notranslate"><span class="pre">SolverMuJoCo</span></code></a>.</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -879,7 +883,7 @@ Request them via <a class="reference internal" href="../api/_generated/newton.Mo
 <ul class="simple">
 <li><p>Some components transparently request attributes they need. For example, <a class="reference internal" href="../api/_generated/newton.sensors.SensorIMU.html#newton.sensors.SensorIMU" title="newton.sensors.SensorIMU"><code class="xref py py-class docutils literal notranslate"><span class="pre">SensorIMU</span></code></a> requests <code class="docutils literal notranslate"><span class="pre">body_qdd</span></code> and <a class="reference internal" href="../api/_generated/newton.sensors.SensorContact.html#newton.sensors.SensorContact" title="newton.sensors.SensorContact"><code class="xref py py-class docutils literal notranslate"><span class="pre">SensorContact</span></code></a> requests <code class="docutils literal notranslate"><span class="pre">force</span></code>.
 Create sensors before allocating State/Contacts for this to work automatically.</p></li>
-<li><p>Solvers populate extended attributes they support. Currently, <a class="reference internal" href="../api/_generated/newton.solvers.SolverMuJoCo.html#newton.solvers.SolverMuJoCo" title="newton.solvers.SolverMuJoCo"><code class="xref py py-class docutils literal notranslate"><span class="pre">SolverMuJoCo</span></code></a> populates <code class="docutils literal notranslate"><span class="pre">body_qdd</span></code>, <code class="docutils literal notranslate"><span class="pre">body_parent_f</span></code>, and <code class="docutils literal notranslate"><span class="pre">force</span></code>.</p></li>
+<li><p>Solvers populate extended attributes they support. Currently, <a class="reference internal" href="../api/_generated/newton.solvers.SolverMuJoCo.html#newton.solvers.SolverMuJoCo" title="newton.solvers.SolverMuJoCo"><code class="xref py py-class docutils literal notranslate"><span class="pre">SolverMuJoCo</span></code></a> populates <code class="docutils literal notranslate"><span class="pre">body_qdd</span></code>, <code class="docutils literal notranslate"><span class="pre">body_parent_f</span></code>, <code class="docutils literal notranslate"><span class="pre">mujoco:qfrc_actuator</span></code>, and <code class="docutils literal notranslate"><span class="pre">force</span></code>.</p></li>
 </ul>
 </section>
 </section>
@@ -938,17 +942,9 @@ Create sensors before allocating State/Contacts for this to work automatically.<
 
   <p class="copyright">
     
-      © Copyright 2026, The Newton Developers.
+      © Copyright 2026, The Newton Developers. Documentation licensed under CC-BY-4.0.
       <br/>
     
-  </p>
-</div>
-      
-        <div class="footer-item">
-
-  <p class="sphinx-version">
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
-    <br/>
   </p>
 </div>
       

@@ -8,22 +8,7 @@
      "languageId": "raw"
     }
    },
-   "source": [
-    "SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers\n",
-    "SPDX-License-Identifier: Apache-2.0\n",
-    "\n",
-    "Licensed under the Apache License, Version 2.0 (the \"License\");\n",
-    "you may not use this file except in compliance with the License.\n",
-    "You may obtain a copy of the License at\n",
-    "\n",
-    "http://www.apache.org/licenses/LICENSE-2.0\n",
-    "\n",
-    "Unless required by applicable law or agreed to in writing, software\n",
-    "distributed under the License is distributed on an \"AS IS\" BASIS,\n",
-    "WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n",
-    "See the License for the specific language governing permissions and\n",
-    "limitations under the License."
-   ]
+   "source": "SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers\nSPDX-License-Identifier: CC-BY-4.0"
   },
   {
    "cell_type": "markdown",
@@ -117,44 +102,7 @@
    "execution_count": null,
    "metadata": {},
    "outputs": [],
-   "source": [
-    "# Add a ground plane (infinite static plane at z=0)\n",
-    "builder.add_ground_plane()\n",
-    "\n",
-    "# Height from which to drop shapes\n",
-    "drop_z = 2.0\n",
-    "\n",
-    "# SPHERE\n",
-    "sphere_pos = wp.vec3(0.0, -4.0, drop_z)\n",
-    "body_sphere = builder.add_body(\n",
-    "    xform=wp.transform(p=sphere_pos, q=wp.quat_identity()),\n",
-    "    key=\"sphere\",  # Optional: human-readable identifier\n",
-    ")\n",
-    "builder.add_shape_sphere(body_sphere, radius=0.5)\n",
-    "\n",
-    "# CAPSULE\n",
-    "capsule_pos = wp.vec3(0.0, -2.0, drop_z)\n",
-    "body_capsule = builder.add_body(xform=wp.transform(p=capsule_pos, q=wp.quat_identity()), key=\"capsule\")\n",
-    "builder.add_shape_capsule(body_capsule, radius=0.3, half_height=0.7)\n",
-    "\n",
-    "# CYLINDER\n",
-    "cylinder_pos = wp.vec3(0.0, 0.0, drop_z)\n",
-    "body_cylinder = builder.add_body(xform=wp.transform(p=cylinder_pos, q=wp.quat_identity()), key=\"cylinder\")\n",
-    "builder.add_shape_cylinder(body_cylinder, radius=0.4, half_height=0.6)\n",
-    "\n",
-    "# Multi-Shape Collider\n",
-    "multi_shape_pos = wp.vec3(0.0, 2.0, drop_z)\n",
-    "body_multi_shape = builder.add_body(xform=wp.transform(p=multi_shape_pos, q=wp.quat_identity()), key=\"multi_shape\")\n",
-    "\n",
-    "# Now attach both a sphere and a box to the multi-shape body\n",
-    "# body-local shape offsets, offset sphere in x so the body will topple over\n",
-    "sphere_offset = wp.vec3(0.1, 0.0, -0.3)\n",
-    "box_offset = wp.vec3(0.0, 0.0, 0.3)\n",
-    "builder.add_shape_sphere(body_multi_shape, wp.transform(p=sphere_offset, q=wp.quat_identity()), radius=0.25)\n",
-    "builder.add_shape_box(body_multi_shape, wp.transform(p=box_offset, q=wp.quat_identity()), hx=0.25, hy=0.25, hz=0.25)\n",
-    "\n",
-    "print(f\"Added {builder.body_count} bodies with collision shapes\")"
-   ]
+   "source": "# Add a ground plane (infinite static plane at z=0)\nbuilder.add_ground_plane()\n\n# Height from which to drop shapes\ndrop_z = 2.0\n\n# SPHERE\nsphere_pos = wp.vec3(0.0, -4.0, drop_z)\nbody_sphere = builder.add_body(\n    xform=wp.transform(p=sphere_pos, q=wp.quat_identity()),\n    label=\"sphere\",  # Optional: human-readable identifier\n)\nbuilder.add_shape_sphere(body_sphere, radius=0.5)\n\n# CAPSULE\ncapsule_pos = wp.vec3(0.0, -2.0, drop_z)\nbody_capsule = builder.add_body(xform=wp.transform(p=capsule_pos, q=wp.quat_identity()), label=\"capsule\")\nbuilder.add_shape_capsule(body_capsule, radius=0.3, half_height=0.7)\n\n# CYLINDER\ncylinder_pos = wp.vec3(0.0, 0.0, drop_z)\nbody_cylinder = builder.add_body(xform=wp.transform(p=cylinder_pos, q=wp.quat_identity()), label=\"cylinder\")\nbuilder.add_shape_cylinder(body_cylinder, radius=0.4, half_height=0.6)\n\n# Multi-Shape Collider\nmulti_shape_pos = wp.vec3(0.0, 2.0, drop_z)\nbody_multi_shape = builder.add_body(xform=wp.transform(p=multi_shape_pos, q=wp.quat_identity()), label=\"multi_shape\")\n\n# Now attach both a sphere and a box to the multi-shape body\n# body-local shape offsets, offset sphere in x so the body will topple over\nsphere_offset = wp.vec3(0.1, 0.0, -0.3)\nbox_offset = wp.vec3(0.0, 0.0, 0.3)\nbuilder.add_shape_sphere(body_multi_shape, wp.transform(p=sphere_offset, q=wp.quat_identity()), radius=0.25)\nbuilder.add_shape_box(body_multi_shape, wp.transform(p=box_offset, q=wp.quat_identity()), hx=0.25, hy=0.25, hz=0.25)\n\nprint(f\"Added {builder.body_count} bodies with collision shapes\")"
   },
   {
    "cell_type": "markdown",
@@ -170,18 +118,7 @@
    "execution_count": null,
    "metadata": {},
    "outputs": [],
-   "source": [
-    "# Load a mesh from a USD file\n",
-    "usd_stage = Usd.Stage.Open(newton.examples.get_asset(\"bunny.usd\"))\n",
-    "demo_mesh = newton.usd.get_mesh(usd_stage.GetPrimAtPath(\"/root/bunny\"))\n",
-    "\n",
-    "# Add the mesh as a rigid body\n",
-    "mesh_pos = wp.vec3(0.0, 4.0, drop_z - 0.5)\n",
-    "body_mesh = builder.add_body(xform=wp.transform(p=mesh_pos, q=wp.quat(0.5, 0.5, 0.5, 0.5)), key=\"bunny\")\n",
-    "builder.add_shape_mesh(body_mesh, mesh=demo_mesh)\n",
-    "\n",
-    "print(f\"Added mesh body with {demo_mesh.vertices.shape[0]} vertices\")"
-   ]
+   "source": "# Load a mesh from a USD file\nusd_stage = Usd.Stage.Open(newton.examples.get_asset(\"bunny.usd\"))\ndemo_mesh = newton.usd.get_mesh(usd_stage.GetPrimAtPath(\"/root/bunny\"))\n\n# Add the mesh as a rigid body\nmesh_pos = wp.vec3(0.0, 4.0, drop_z - 0.5)\nbody_mesh = builder.add_body(xform=wp.transform(p=mesh_pos, q=wp.quat(0.5, 0.5, 0.5, 0.5)), label=\"bunny\")\nbuilder.add_shape_mesh(body_mesh, mesh=demo_mesh)\n\nprint(f\"Added mesh body with {demo_mesh.vertices.shape[0]} vertices\")"
   },
   {
    "cell_type": "markdown",
@@ -246,10 +183,10 @@
     "# The control object is not used in this example, but we create it for completeness\n",
     "control = model.control()\n",
     "\n",
-    "# Perform initial collision detection\n",
-    "contacts = model.collide(state_0)\n",
+    "# Allocate Contacts buffer\n",
+    "contacts = model.contacts()\n",
     "\n",
-    "print(\"State and control objects created\")"
+    "print(\"State, Contacts and Control objects created\")"
    ]
   },
   {
@@ -337,7 +274,7 @@
     "        # viewer.apply_forces(state_0)\n",
     "\n",
     "        # 3. Detect collisions\n",
-    "        contacts = model.collide(state_0)\n",
+    "        model.collide(state_0, contacts)\n",
     "\n",
     "        # 4. Step the simulation by one physics timestep\n",
     "        solver.step(state_in=state_0, state_out=state_1, control=control, contacts=contacts, dt=sim_dt)\n",

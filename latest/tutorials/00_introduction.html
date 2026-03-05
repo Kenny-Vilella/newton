@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="../_static/documentation_options.js?v=938c9ccc"></script>
+    <script src="../_static/documentation_options.js?v=1c471e8e"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -135,7 +135,7 @@
     <img src="../_static/newton-logo-dark.png" class="logo__image only-dark pst-js-only" alt="Newton Physics Logo"/>
   
   
-    <p class="title logo__title">Newton Physics <span style='font-size: 0.8em; color: #888;'>(0.2.0)</span></p>
+    <p class="title logo__title">Newton Physics <span style='font-size: 0.8em; color: #888;'>(1.1.0.dev0)</span></p>
   
 </a></div>
     
@@ -840,24 +840,22 @@
 <div class="nboutput docutils container">
 <div class="prompt empty docutils container">
 </div>
-<div class="output_area docutils container">
+<div class="output_area stderr docutils container">
 <div class="highlight"><pre>
-Warp DeprecationWarning: The namespace `warp.context` will soon be removed from the public API. It can still be accessed from `warp._src.context` but might be changed or removed without notice.
-Warp DeprecationWarning: The symbol `warp.context.Device` will soon be removed from the public API. Use `warp.Device` instead.
-Warp 1.12.0.dev20260127 initialized:
-   CUDA driver not found or failed to initialize
-   Devices:
-     &#34;cpu&#34;      : &#34;x86_64&#34;
-   Kernel cache:
-     /home/runner/.cache/warp/1.12.0.dev20260127
+Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. GPU execution will not be available.
 </pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
-<div class="output_area stderr docutils container">
+<div class="output_area docutils container">
 <div class="highlight"><pre>
-Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. Proceeding in CPU-only mode.
+Warp 1.12.0rc2 initialized:
+   CUDA Toolkit 12.9, CUDA driver not available (NVRTC compilation available)
+   Devices:
+     &#34;cpu&#34;      : &#34;x86_64&#34;
+   Kernel cache:
+     /home/runner/.cache/warp/1.12.0rc2
 </pre></div></div>
 </div>
 </section>
@@ -906,23 +904,23 @@ Warp CUDA warning: Could not find or load the NVIDIA CUDA driver. Proceeding in 
 <span class="n">sphere_pos</span> <span class="o">=</span> <span class="n">wp</span><span class="o">.</span><span class="n">vec3</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">4.0</span><span class="p">,</span> <span class="n">drop_z</span><span class="p">)</span>
 <span class="n">body_sphere</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span>
     <span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">sphere_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat_identity</span><span class="p">()),</span>
-    <span class="n">key</span><span class="o">=</span><span class="s2">&quot;sphere&quot;</span><span class="p">,</span>  <span class="c1"># Optional: human-readable identifier</span>
+    <span class="n">label</span><span class="o">=</span><span class="s2">&quot;sphere&quot;</span><span class="p">,</span>  <span class="c1"># Optional: human-readable identifier</span>
 <span class="p">)</span>
 <span class="n">builder</span><span class="o">.</span><span class="n">add_shape_sphere</span><span class="p">(</span><span class="n">body_sphere</span><span class="p">,</span> <span class="n">radius</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
 
 <span class="c1"># CAPSULE</span>
 <span class="n">capsule_pos</span> <span class="o">=</span> <span class="n">wp</span><span class="o">.</span><span class="n">vec3</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">2.0</span><span class="p">,</span> <span class="n">drop_z</span><span class="p">)</span>
-<span class="n">body_capsule</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">capsule_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat_identity</span><span class="p">()),</span> <span class="n">key</span><span class="o">=</span><span class="s2">&quot;capsule&quot;</span><span class="p">)</span>
+<span class="n">body_capsule</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">capsule_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat_identity</span><span class="p">()),</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;capsule&quot;</span><span class="p">)</span>
 <span class="n">builder</span><span class="o">.</span><span class="n">add_shape_capsule</span><span class="p">(</span><span class="n">body_capsule</span><span class="p">,</span> <span class="n">radius</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">half_height</span><span class="o">=</span><span class="mf">0.7</span><span class="p">)</span>
 
 <span class="c1"># CYLINDER</span>
 <span class="n">cylinder_pos</span> <span class="o">=</span> <span class="n">wp</span><span class="o">.</span><span class="n">vec3</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">drop_z</span><span class="p">)</span>
-<span class="n">body_cylinder</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">cylinder_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat_identity</span><span class="p">()),</span> <span class="n">key</span><span class="o">=</span><span class="s2">&quot;cylinder&quot;</span><span class="p">)</span>
+<span class="n">body_cylinder</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">cylinder_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat_identity</span><span class="p">()),</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;cylinder&quot;</span><span class="p">)</span>
 <span class="n">builder</span><span class="o">.</span><span class="n">add_shape_cylinder</span><span class="p">(</span><span class="n">body_cylinder</span><span class="p">,</span> <span class="n">radius</span><span class="o">=</span><span class="mf">0.4</span><span class="p">,</span> <span class="n">half_height</span><span class="o">=</span><span class="mf">0.6</span><span class="p">)</span>
 
 <span class="c1"># Multi-Shape Collider</span>
 <span class="n">multi_shape_pos</span> <span class="o">=</span> <span class="n">wp</span><span class="o">.</span><span class="n">vec3</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="n">drop_z</span><span class="p">)</span>
-<span class="n">body_multi_shape</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">multi_shape_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat_identity</span><span class="p">()),</span> <span class="n">key</span><span class="o">=</span><span class="s2">&quot;multi_shape&quot;</span><span class="p">)</span>
+<span class="n">body_multi_shape</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">multi_shape_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat_identity</span><span class="p">()),</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;multi_shape&quot;</span><span class="p">)</span>
 
 <span class="c1"># Now attach both a sphere and a box to the multi-shape body</span>
 <span class="c1"># body-local shape offsets, offset sphere in x so the body will topple over</span>
@@ -957,7 +955,7 @@ Added 4 bodies with collision shapes
 
 <span class="c1"># Add the mesh as a rigid body</span>
 <span class="n">mesh_pos</span> <span class="o">=</span> <span class="n">wp</span><span class="o">.</span><span class="n">vec3</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">4.0</span><span class="p">,</span> <span class="n">drop_z</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span>
-<span class="n">body_mesh</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">mesh_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">)),</span> <span class="n">key</span><span class="o">=</span><span class="s2">&quot;bunny&quot;</span><span class="p">)</span>
+<span class="n">body_mesh</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">add_body</span><span class="p">(</span><span class="n">xform</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">p</span><span class="o">=</span><span class="n">mesh_pos</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="n">wp</span><span class="o">.</span><span class="n">quat</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">)),</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;bunny&quot;</span><span class="p">)</span>
 <span class="n">builder</span><span class="o">.</span><span class="n">add_shape_mesh</span><span class="p">(</span><span class="n">body_mesh</span><span class="p">,</span> <span class="n">mesh</span><span class="o">=</span><span class="n">demo_mesh</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Added mesh body with </span><span class="si">{</span><span class="n">demo_mesh</span><span class="o">.</span><span class="n">vertices</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> vertices&quot;</span><span class="p">)</span>
@@ -969,7 +967,7 @@ Added 4 bodies with collision shapes
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-Module newton._src.geometry.inertia 8e8f74f load on device &#39;cpu&#39; took 2445.13 ms  (compiled)
+Module newton._src.geometry.inertia c57c45a load on device &#39;cpu&#39; took 2473.83 ms  (compiled)
 Added mesh body with 6102 vertices
 </pre></div></div>
 </div>
@@ -1002,8 +1000,7 @@ Added mesh body with 6102 vertices
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-Module validate_and_correct_inertia_kernel_1911a1c2 f78b133 load on device &#39;cpu&#39; took 2009.09 ms  (compiled)
-Module count_contact_points_6b041b6e 383e490 load on device &#39;cpu&#39; took 1980.79 ms  (compiled)
+Module validate_and_correct_inertia_kernel_8fd4dd1e 9a64c1c load on device &#39;cpu&#39; took 2071.01 ms  (compiled)
 Model finalized for device cpu:
   Bodies: 5
   Shapes: 7
@@ -1033,21 +1030,28 @@ Model finalized for device cpu:
 <span class="c1"># The control object is not used in this example, but we create it for completeness</span>
 <span class="n">control</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">control</span><span class="p">()</span>
 
-<span class="c1"># Perform initial collision detection</span>
-<span class="n">contacts</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">collide</span><span class="p">(</span><span class="n">state_0</span><span class="p">)</span>
+<span class="c1"># Allocate Contacts buffer</span>
+<span class="n">contacts</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">contacts</span><span class="p">()</span>
 
-<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;State and control objects created&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;State, Contacts and Control objects created&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+/home/runner/work/newton/newton/newton/_src/sim/collide.py:585: UserWarning: NarrowPhase running on CPU: mesh-mesh contacts will be skipped (SDF-based mesh-mesh collision requires CUDA). Use a CUDA device for full mesh-mesh contact support.
+  self.narrow_phase = NarrowPhase(
+</pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-Module newton._src.geometry.kernels b1dc1e9 load on device &#39;cpu&#39; took 4345.41 ms  (compiled)
-Module generate_handle_contact_pairs_kernel__locals__handle_contact_pairs_356abb58 a9ecfb8 load on device &#39;cpu&#39; took 3416.38 ms  (compiled)
-State and control objects created
+State, Contacts and Control objects created
 </pre></div></div>
 </div>
 </section>
@@ -1135,7 +1139,7 @@ Simulation configured:
         <span class="c1"># viewer.apply_forces(state_0)</span>
 
         <span class="c1"># 3. Detect collisions</span>
-        <span class="n">contacts</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">collide</span><span class="p">(</span><span class="n">state_0</span><span class="p">)</span>
+        <span class="n">model</span><span class="o">.</span><span class="n">collide</span><span class="p">(</span><span class="n">state_0</span><span class="p">,</span> <span class="n">contacts</span><span class="p">)</span>
 
         <span class="c1"># 4. Step the simulation by one physics timestep</span>
         <span class="n">solver</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">state_in</span><span class="o">=</span><span class="n">state_0</span><span class="p">,</span> <span class="n">state_out</span><span class="o">=</span><span class="n">state_1</span><span class="p">,</span> <span class="n">control</span><span class="o">=</span><span class="n">control</span><span class="p">,</span> <span class="n">contacts</span><span class="o">=</span><span class="n">contacts</span><span class="p">,</span> <span class="n">dt</span><span class="o">=</span><span class="n">sim_dt</span><span class="p">)</span>
@@ -1210,7 +1214,7 @@ Running on CPU (no CUDA graph)
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-Module newton._src.viewer.kernels 5d36fe6 load on device &#39;cpu&#39; took 3068.13 ms  (compiled)
+Module newton._src.viewer.kernels afa8b9f load on device &#39;cpu&#39; took 3053.73 ms  (compiled)
 </pre></div></div>
 </div>
 </section>
@@ -1253,8 +1257,15 @@ Module newton._src.viewer.kernels 5d36fe6 load on device &#39;cpu&#39; took 3068
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-Module newton._src.solvers.xpbd.kernels bff295d load on device &#39;cpu&#39; took 11353.06 ms  (compiled)
-Module newton._src.solvers.solver dc85a44 load on device &#39;cpu&#39; took 2394.44 ms  (compiled)
+Module newton._src.sim.collide bd35c25 load on device &#39;cpu&#39; took 3000.51 ms  (compiled)
+Module newton._src.geometry.broad_phase_nxn 99e0260 load on device &#39;cpu&#39; took 2310.69 ms  (compiled)
+Module create_narrow_phase_primitive_kernel__locals__narrow_phase_primitive_kernel_3f6445dc 47c5d6e load on device &#39;cpu&#39; took 2989.39 ms  (compiled)
+Module create_narrow_phase_kernel_gjk_mpr__locals__narrow_phase_kernel_gjk_mpr_07d9f4f5 3c68058 load on device &#39;cpu&#39; took 4520.29 ms  (compiled)
+Module create_narrow_phase_process_mesh_plane_contacts_kernel__locals__narrow_phase_process_mesh_plane_contacts_kernel_8ca3d011 9b9392c load on device &#39;cpu&#39; took 2227.23 ms  (compiled)
+Module newton._src.geometry.narrow_phase aec51da load on device &#39;cpu&#39; took 2590.85 ms  (compiled)
+Module create_narrow_phase_process_mesh_triangle_contacts_kernel__locals__narrow_phase_process_mesh_triangle_contacts_kernel_eb9766e4 7db12ea load on device &#39;cpu&#39; took 4831.40 ms  (compiled)
+Module newton._src.solvers.xpbd.kernels f72297f load on device &#39;cpu&#39; took 11502.00 ms  (compiled)
+Module newton._src.solvers.solver 85b7f53 load on device &#39;cpu&#39; took 2459.87 ms  (compiled)
 
 Simulation complete! Total time: 8.33 seconds
 </pre></div></div>
@@ -1353,17 +1364,9 @@ Simulation complete! Total time: 8.33 seconds
 
   <p class="copyright">
     
-      © Copyright 2026, The Newton Developers.
+      © Copyright 2026, The Newton Developers. Documentation licensed under CC-BY-4.0.
       <br/>
     
-  </p>
-</div>
-      
-        <div class="footer-item">
-
-  <p class="sphinx-version">
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 8.2.3.
-    <br/>
   </p>
 </div>
       
