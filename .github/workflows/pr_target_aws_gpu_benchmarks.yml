@@ -1,11 +1,7 @@
 name: Pull Request - AWS GPU Benchmarks
 
 on:
-  pull_request_target:
-
-concurrency:
-  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  pull_request:
 
 permissions:
   contents: read
