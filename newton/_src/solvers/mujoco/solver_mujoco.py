@@ -100,6 +100,8 @@ class SolverMuJoCo(SolverBase):
     mujoco_warp backends, enabling efficient simulation of articulated systems with
     contacts and constraints.
 
+    Dummy change
+
     .. note::
 
         - This solver requires `mujoco_warp`_ and its dependencies to be installed.
