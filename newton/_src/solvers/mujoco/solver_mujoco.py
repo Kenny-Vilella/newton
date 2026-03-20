@@ -97,8 +97,6 @@ class SolverMuJoCo(SolverBase):
     """
     This solver provides an interface to simulate physics using the `MuJoCo <https://github.com/google-deepmind/mujoco>`_ physics engine,
     optimized with GPU acceleration through `mujoco_warp <https://github.com/google-deepmind/mujoco_warp>`_. It supports both MuJoCo and
-    mujoco_warp backends, enabling efficient simulation of articulated systems with
-    contacts and constraints.
 
     .. note::
 
