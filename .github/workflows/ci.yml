@@ -111,8 +111,19 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version-file: ".python-version"
+      - name: Restore Warp kernel cache
+        if: github.event_name != 'merge_group'
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7  # v5.0.4
+        with:
+          path: |
+            ~/.cache/warp
+            ~/Library/Caches/warp
+            ~\AppData\Local\NVIDIA\warp\Cache
+          key: warp-kernels-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('uv.lock', 'newton/**/*.py') }}
+          restore-keys: |
+            warp-kernels-${{ runner.os }}-${{ runner.arch }}-
       - name: Run Tests
-        run: uv run --extra dev -m newton.tests --junit-report-xml rspec.xml --coverage --coverage-xml coverage.xml
+        run: uv run --extra dev -m newton.tests --no-cache-clear --junit-report-xml rspec.xml --coverage --coverage-xml coverage.xml
       - name: Test Summary
         uses: test-summary/action@31493c76ec9e7aa675f1585d3ed6f1da69269a86  # v2.4
         with:
@@ -121,13 +132,15 @@ jobs:
         if: always()
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3  # v1.2.1
+        uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5.5.3
         with:
           files: ./rspec.xml
+          report_type: test_results
           token: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5.5.3
         with:
+          disable_search: true
           env_vars: OS
           files: ./coverage.xml
           flags: unittests
