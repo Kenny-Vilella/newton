@@ -13,6 +13,7 @@ from ..geometry.broad_phase_sap import BroadPhaseSAP
 from ..geometry.collision_core import compute_tight_aabb_from_support
 from ..geometry.contact_data import ContactData
 from ..geometry.differentiable_contacts import launch_differentiable_contact_augment
+from ..geometry.flags import ShapeFlags
 from ..geometry.kernels import create_soft_contacts
 from ..geometry.narrow_phase import NarrowPhase
 from ..geometry.sdf_hydroelastic import HydroelasticSDF
@@ -33,26 +34,26 @@ class ContactWriterData:
 
     contact_max: int
     # Body information arrays (for transforming to body-local coordinates)
-    body_q: wp.array(dtype=wp.transform)
-    shape_body: wp.array(dtype=int)
-    shape_gap: wp.array(dtype=float)
+    body_q: wp.array[wp.transform]
+    shape_body: wp.array[int]
+    shape_gap: wp.array[float]
     # Output arrays
-    contact_count: wp.array(dtype=int)
-    out_shape0: wp.array(dtype=int)
-    out_shape1: wp.array(dtype=int)
-    out_point0: wp.array(dtype=wp.vec3)
-    out_point1: wp.array(dtype=wp.vec3)
-    out_offset0: wp.array(dtype=wp.vec3)
-    out_offset1: wp.array(dtype=wp.vec3)
-    out_normal: wp.array(dtype=wp.vec3)
-    out_margin0: wp.array(dtype=float)
-    out_margin1: wp.array(dtype=float)
-    out_tids: wp.array(dtype=int)
+    contact_count: wp.array[int]
+    out_shape0: wp.array[int]
+    out_shape1: wp.array[int]
+    out_point0: wp.array[wp.vec3]
+    out_point1: wp.array[wp.vec3]
+    out_offset0: wp.array[wp.vec3]
+    out_offset1: wp.array[wp.vec3]
+    out_normal: wp.array[wp.vec3]
+    out_margin0: wp.array[float]
+    out_margin1: wp.array[float]
+    out_tids: wp.array[int]
     # Per-contact shape properties, empty arrays if not enabled.
     # Zero-values indicate that no per-contact shape properties are set for this contact
-    out_stiffness: wp.array(dtype=float)
-    out_damping: wp.array(dtype=float)
-    out_friction: wp.array(dtype=float)
+    out_stiffness: wp.array[float]
+    out_damping: wp.array[float]
+    out_friction: wp.array[float]
 
 
 @wp.func
@@ -140,20 +141,20 @@ def write_contact(
 
 @wp.kernel(enable_backward=False)
 def compute_shape_aabbs(
-    body_q: wp.array(dtype=wp.transform),
-    shape_transform: wp.array(dtype=wp.transform),
-    shape_body: wp.array(dtype=int),
-    shape_type: wp.array(dtype=int),
-    shape_scale: wp.array(dtype=wp.vec3),
-    shape_collision_radius: wp.array(dtype=float),
-    shape_source_ptr: wp.array(dtype=wp.uint64),
-    shape_margin: wp.array(dtype=float),
-    shape_gap: wp.array(dtype=float),
-    shape_collision_aabb_lower: wp.array(dtype=wp.vec3),
-    shape_collision_aabb_upper: wp.array(dtype=wp.vec3),
+    body_q: wp.array[wp.transform],
+    shape_transform: wp.array[wp.transform],
+    shape_body: wp.array[int],
+    shape_type: wp.array[int],
+    shape_scale: wp.array[wp.vec3],
+    shape_collision_radius: wp.array[float],
+    shape_source_ptr: wp.array[wp.uint64],
+    shape_margin: wp.array[float],
+    shape_gap: wp.array[float],
+    shape_collision_aabb_lower: wp.array[wp.vec3],
+    shape_collision_aabb_upper: wp.array[wp.vec3],
     # outputs
-    aabb_lower: wp.array(dtype=wp.vec3),
-    aabb_upper: wp.array(dtype=wp.vec3),
+    aabb_lower: wp.array[wp.vec3],
+    aabb_upper: wp.array[wp.vec3],
 ):
     """Compute axis-aligned bounding boxes for each shape in world space.
 
@@ -241,15 +242,15 @@ def compute_shape_aabbs(
 
 @wp.kernel(enable_backward=False)
 def prepare_geom_data_kernel(
-    shape_transform: wp.array(dtype=wp.transform),
-    shape_body: wp.array(dtype=int),
-    shape_type: wp.array(dtype=int),
-    shape_scale: wp.array(dtype=wp.vec3),
-    shape_margin: wp.array(dtype=float),
-    body_q: wp.array(dtype=wp.transform),
+    shape_transform: wp.array[wp.transform],
+    shape_body: wp.array[int],
+    shape_type: wp.array[int],
+    shape_scale: wp.array[wp.vec3],
+    shape_margin: wp.array[float],
+    body_q: wp.array[wp.transform],
     # Outputs
-    geom_data: wp.array(dtype=wp.vec4),  # scale xyz, margin w
-    geom_transform: wp.array(dtype=wp.transform),  # world space transform
+    geom_data: wp.array[wp.vec4],  # scale xyz, margin w
+    geom_transform: wp.array[wp.transform],  # world space transform
 ):
     """Prepare geometry data arrays for NarrowPhase API."""
     idx = wp.tid()
@@ -368,6 +369,47 @@ def _estimate_rigid_contact_max(model: Model) -> int:
     return max(1000, total_contacts)
 
 
+def _compute_per_world_shape_pairs_max(model: Model) -> int:
+    """Compute the maximum number of candidate shape pairs using per-world counts.
+
+    For multi-world scenes the global formula ``N*(N-1)/2`` is O(W^2 * S^2)
+    where W is the number of worlds and S is shapes per world.  The correct
+    upper bound is the sum of per-world lower-triangular counts which is
+    O(W * S^2).
+
+    The result mirrors the segment layout produced by
+    :func:`precompute_world_map`: each regular world's segment contains the
+    world's local shapes **plus** all global shapes (world == -1), and a
+    dedicated final segment contains only the global shapes.  Each segment
+    contributes ``n*(n-1)/2`` candidate pairs independently.
+    """
+    shape_world = getattr(model, "shape_world", None)
+    shape_count = model.shape_count
+    if shape_world is None or shape_count <= 1:
+        return max(0, (shape_count * (shape_count - 1)) // 2)
+
+    sw = shape_world.numpy()
+    shape_flags = getattr(model, "shape_flags", None)
+    if shape_flags is not None:
+        sf = shape_flags.numpy()
+        colliding = (sf & int(ShapeFlags.COLLIDE_SHAPES)) != 0
+    else:
+        colliding = np.ones(len(sw), dtype=bool)
+
+    global_count = int(np.count_nonzero((sw == -1) & colliding))
+    world_ids = np.unique(sw[(sw >= 0) & colliding])
+
+    total = 0
+    for wid in world_ids:
+        n = int(np.count_nonzero((sw == wid) & colliding)) + global_count
+        total += (n * (n - 1)) // 2
+
+    # Dedicated global-vs-global segment (appended by precompute_world_map).
+    total += (global_count * (global_count - 1)) // 2
+
+    return max(0, total)
+
+
 BROAD_PHASE_MODES = ("nxn", "sap", "explicit")
 
 
@@ -417,7 +459,7 @@ class CollisionPipeline:
         reduce_contacts: bool = True,
         rigid_contact_max: int | None = None,
         max_triangle_pairs: int = 1000000,
-        shape_pairs_filtered: wp.array(dtype=wp.vec2i) | None = None,
+        shape_pairs_filtered: wp.array[wp.vec2i] | None = None,
         soft_contact_max: int | None = None,
         soft_contact_margin: float = 0.01,
         requires_grad: bool | None = None,
@@ -531,7 +573,7 @@ class CollisionPipeline:
                 self.shape_pairs_excluded_count = 0
             else:
                 self.shape_pairs_filtered = None
-                self.shape_pairs_max = (shape_count * (shape_count - 1)) // 2
+                self.shape_pairs_max = _compute_per_world_shape_pairs_max(model)
                 self.shape_pairs_excluded = self._build_excluded_pairs(model)
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
@@ -565,7 +607,7 @@ class CollisionPipeline:
                     raise ValueError("model.shape_world is required for broad_phase=NXN")
                 self.broad_phase = BroadPhaseAllPairs(shape_world, shape_flags=shape_flags, device=device)
                 self.shape_pairs_filtered = None
-                self.shape_pairs_max = (shape_count * (shape_count - 1)) // 2
+                self.shape_pairs_max = _compute_per_world_shape_pairs_max(model)
                 self.shape_pairs_excluded = self._build_excluded_pairs(model)
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
@@ -575,7 +617,7 @@ class CollisionPipeline:
                     raise ValueError("model.shape_world is required for broad_phase=SAP")
                 self.broad_phase = BroadPhaseSAP(shape_world, shape_flags=shape_flags, device=device)
                 self.shape_pairs_filtered = None
-                self.shape_pairs_max = (shape_count * (shape_count - 1)) // 2
+                self.shape_pairs_max = _compute_per_world_shape_pairs_max(model)
                 self.shape_pairs_excluded = self._build_excluded_pairs(model)
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
@@ -698,7 +740,7 @@ class CollisionPipeline:
         return contacts
 
     @staticmethod
-    def _build_excluded_pairs(model: Model) -> wp.array(dtype=wp.vec2i) | None:
+    def _build_excluded_pairs(model: Model) -> wp.array[wp.vec2i] | None:
         if not hasattr(model, "shape_collision_filter_pairs"):
             return None
         filters = model.shape_collision_filter_pairs
@@ -886,6 +928,8 @@ class CollisionPipeline:
             shape_heightfield_index=model.shape_heightfield_index,
             heightfield_data=model.heightfield_data,
             heightfield_elevations=model.heightfield_elevations,
+            mesh_edge_indices=model.mesh_edge_indices,
+            shape_edge_range=model.shape_edge_range,
             writer_data=writer_data,
             device=self.device,
         )
