@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import warp as wp
@@ -254,7 +255,7 @@ def post_process_axial_on_discrete_contact(
                 is_rolling = True
         else:
             # For cylinder: axis should be perpendicular to normal (dot product ≈ 0)
-            perpendicular_threshold = wp.static(wp.sin(2.0 * wp.pi / 180.0))
+            perpendicular_threshold = wp.static(math.sin(2.0 * math.pi / 180.0))
             if axis_normal_dot <= perpendicular_threshold:
                 is_rolling = True
 
@@ -307,6 +308,7 @@ def create_compute_gjk_mpr_contacts(
         margin_a: float,
         margin_b: float,
         writer_data: Any,
+        sort_sub_key: int = 0,
     ):
         """
         Compute contacts between two shapes using GJK/MPR algorithm and write them.
@@ -324,6 +326,7 @@ def create_compute_gjk_mpr_contacts(
             margin_a: Per-shape margin offset for shape A (signed distance padding)
             margin_b: Per-shape margin offset for shape B (signed distance padding)
             writer_data: Data structure for contact writer
+            sort_sub_key: Sub-key for deterministic contact sorting (e.g. triangle/edge index)
         """
         data_provider = SupportMapDataProvider()
 
@@ -354,6 +357,7 @@ def create_compute_gjk_mpr_contacts(
         contact_template.shape_a = shape_a
         contact_template.shape_b = shape_b
         contact_template.gap_sum = rigid_gap
+        contact_template.sort_sub_key = sort_sub_key
 
         if wp.static(ENABLE_MULTI_CONTACT):
             wp.static(create_solve_convex_multi_contact(support_func, writer_func, post_process_contact))(
@@ -924,12 +928,8 @@ def mesh_vs_convex_midphase(
         # Query mesh BVH for overlapping triangles in mesh local space using tiled version
         query = wp.tile_mesh_query_aabb(mesh_id, aabb_lower, aabb_upper)
 
-        result_tile = wp.tile_mesh_query_aabb_next(query)
-
-        # Continue querying while we have results
-        # Each iteration, each thread in the block gets one result (or -1)
-        while wp.tile_max(result_tile)[0] >= 0:
-            # Each thread processes its result from the tile
+        while wp.tile_query_valid(query):
+            result_tile = wp.tile_mesh_query_aabb_next(query)
             tri_index = wp.untile(result_tile)
 
             # Add this triangle pair to the output buffer if valid
@@ -946,12 +946,9 @@ def mesh_vs_convex_midphase(
             offset_broadcast = offset_broadcast_tile[wp.block_dim() - 1]
 
             if tri_index >= 0:
-                # out_idx = wp.atomic_add(triangle_pairs_count, 0, 1)
                 out_idx = offset_broadcast + inclusive_scan[idx_in_thread_block] - has_tri
                 if out_idx < triangle_pairs.shape[0]:
                     triangle_pairs[out_idx] = wp.vec3i(mesh_shape, non_mesh_shape, tri_index)
-
-            result_tile = wp.tile_mesh_query_aabb_next(query)
     else:
         query = wp.mesh_query_aabb(mesh_id, aabb_lower, aabb_upper)
         tri_index = wp.int32(0)
