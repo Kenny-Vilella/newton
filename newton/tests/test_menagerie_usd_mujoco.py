@@ -1053,6 +1053,8 @@ class TestMenagerieUSD(TestMenagerieBase):
         "jnt_",
         # Sparse mass matrix structure: DOF-indexed, compared via _compare_mass_matrix_structure
         "M_",
+        # Sparse RNE derivative D-structure indices: DOF-indexed, depend on DOF ordering
+        "qD_",
         # Sparse tendon Jacobian structure: DOF-indexed, compared via _compare_tendon_jacobian_structure
         "ten_J_",
         "nJten",
