@@ -946,9 +946,7 @@ def compare_qD_structure_mapped(
     inv_dof_map = {v: k for k, v in dof_map.items()}
 
     native_pairs = {(int(native_i[k]), int(native_j[k])) for k in range(nD)}
-    newton_pairs = {
-        (inv_dof_map.get(int(newton_i[k]), -1), inv_dof_map.get(int(newton_j[k]), -1)) for k in range(nD)
-    }
+    newton_pairs = {(inv_dof_map.get(int(newton_i[k]), -1), inv_dof_map.get(int(newton_j[k]), -1)) for k in range(nD)}
 
     missing = native_pairs - newton_pairs
     extra = newton_pairs - native_pairs
