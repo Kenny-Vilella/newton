@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Provides a unified interface for performing Collision Detection in Kamino.
@@ -197,7 +185,6 @@ class CollisionDetector:
         self,
         model: ModelKamino | None = None,
         config: CollisionDetector.Config | None = None,
-        device: wp.DeviceLike = None,
     ):
         """
         Initialize the CollisionDetector.
@@ -208,14 +195,10 @@ class CollisionDetector:
                 If provided, the detector will be finalized using the provided model and config.\n
                 If `None`, the detector will be created empty without allocating data, and
                 can be finalized later by providing a model to the `finalize` method.\n
-            device (`wp.DeviceLike`, optional):
-                The target Warp device for allocation and execution.\n
-                If `None`, the `model.device` will be used if a model is provided, otherwise
-                it will default to the device preferred by Warp on the given platform.
 
         """
-        # Cache the target device
-        self._device: wp.DeviceLike = device
+        # Declare the device cache
+        self._device: wp.DeviceLike = None
 
         # Cache a reference to the target model
         self._model: ModelKamino | None = model
@@ -237,7 +220,7 @@ class CollisionDetector:
 
         # Finalize the collision detector if a model is provided
         if model is not None:
-            self.finalize(model=model, config=config, device=device)
+            self.finalize(model=model, config=config)
 
     ###
     # Properties
@@ -281,7 +264,6 @@ class CollisionDetector:
         self,
         model: ModelKamino | None = None,
         config: CollisionDetector.Config | None = None,
-        device: wp.DeviceLike = None,
     ):
         """
         Allocates CollisionDetector data on the target device.
@@ -295,10 +277,6 @@ class CollisionDetector:
             config (CollisionDetector.Config, optional):
                 Config for the CollisionDetector.\n
                 If `None`, uses default config.
-            device (wp.DeviceLike, optional):
-                The target Warp device for allocation and execution.\n
-                If `None`, the `model.device` will be used if a model is provided, otherwise
-                it will default to the device preferred by Warp on the given platform.
         """
         # Override the model if specified explicitly
         if model is not None:
@@ -310,12 +288,8 @@ class CollisionDetector:
         elif not isinstance(self._model, ModelKamino):
             raise TypeError(f"Cannot finalize CollisionDetector: expected ModelKamino, got {type(self._model)}")
 
-        # Override the device if specified explicitly
-        if device is not None:
-            self._device = device
-        # Otherwise, use the device of the model
-        else:
-            self._device = self._model.device
+        # Use the model's device
+        self._device = self._model.device
 
         # Override the config if specified, ensuring that they are valid
         if config is not None:
@@ -374,14 +348,12 @@ class CollisionDetector:
             match self._pipeline_type:
                 case CollisionPipelineType.PRIMITIVE:
                     self._primitive_pipeline = CollisionPipelinePrimitive(
-                        device=self._device,
                         model=self._model,
                         bvtype=self._config.bvtype,
                         default_gap=self._config.default_gap,
                     )
                 case CollisionPipelineType.UNIFIED:
                     self._unified_pipeline = CollisionPipelineUnifiedKamino(
-                        device=self._device,
                         model=self._model,
                         broadphase=self._config.broadphase,
                         default_gap=self._config.default_gap,

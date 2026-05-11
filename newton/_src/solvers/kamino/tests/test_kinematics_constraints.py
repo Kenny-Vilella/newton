@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 KAMINO: UNIT TESTS: KINEMATICS: CONSTRAINTS
@@ -87,7 +75,7 @@ class TestKinematicsConstraints(unittest.TestCase):
         data = model.data(device=self.default_device)
 
         # Create a  limits container
-        limits = LimitsKamino(model=model, device=self.default_device)
+        limits = LimitsKamino(model=model)
         if self.verbose:
             print("")
             print("limits.model_max_limits_host: ", limits.model_max_limits_host)
@@ -111,7 +99,6 @@ class TestKinematicsConstraints(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=contacts,
-            device=self.default_device,
         )
         if self.verbose:
             print(f"model.size:\n{model.size}\n\n")
@@ -144,7 +131,7 @@ class TestKinematicsConstraints(unittest.TestCase):
         data = model.data(device=self.default_device)
 
         # Create a  limits container
-        limits = LimitsKamino(model=model, device=self.default_device)
+        limits = LimitsKamino(model=model)
         if self.verbose:
             print("")
             print("limits.model_max_limits_host: ", limits.model_max_limits_host)
@@ -168,7 +155,6 @@ class TestKinematicsConstraints(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=contacts,
-            device=self.default_device,
         )
         if self.verbose:
             print_model_constraint_info(model)
@@ -239,7 +225,7 @@ class TestKinematicsConstraints(unittest.TestCase):
         data = model.data(device=self.default_device)
 
         # Create a  limits container
-        limits = LimitsKamino(model=model, device=self.default_device)
+        limits = LimitsKamino(model=model)
         if self.verbose:
             print("")
             print("limits.model_max_limits_host: ", limits.model_max_limits_host)
@@ -263,7 +249,6 @@ class TestKinematicsConstraints(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=contacts,
-            device=self.default_device,
         )
         if self.verbose:
             print_model_constraint_info(model)

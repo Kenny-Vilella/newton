@@ -1,21 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import math
+import sys
 import unittest
 import warnings
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 import warp as wp
@@ -24,6 +15,79 @@ import newton
 from newton import ModelBuilder
 from newton._src.geometry.utils import transform_points
 from newton.tests.unittest_utils import assert_np_equal
+
+
+class TestModelBuilderDeprecations(unittest.TestCase):
+    def test_default_body_armature_get_and_set_warn(self):
+        builder = ModelBuilder()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            builder.default_body_armature = 0.25
+            value = builder.default_body_armature
+
+        self.assertAlmostEqual(value, 0.25)
+        self.assertEqual(len(caught), 2)
+        self.assertTrue(all(issubclass(item.category, DeprecationWarning) for item in caught))
+        self.assertTrue(all("default_body_armature" in str(item.message) for item in caught))
+        self.assertTrue(all(item.filename.endswith("test_model.py") for item in caught))
+
+    def test_add_link_armature_warns_and_preserves_inertia(self):
+        builder = ModelBuilder()
+        inertia = np.diag([1.0, 2.0, 3.0]).astype(np.float32)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            body = builder.add_link(mass=1.0, inertia=inertia, armature=0.5)
+
+        self.assertEqual(body, 0)
+        self.assertEqual(len(caught), 1)
+        self.assertTrue(issubclass(caught[0].category, DeprecationWarning))
+        self.assertIn("add_link(..., armature=...)", str(caught[0].message))
+        self.assertTrue(caught[0].filename.endswith("test_model.py"))
+        np.testing.assert_allclose(
+            np.asarray(builder.body_inertia[body]).reshape(3, 3),
+            inertia + np.eye(3, dtype=np.float32) * 0.5,
+            atol=1e-6,
+        )
+
+    def test_add_body_armature_warns_and_preserves_inertia(self):
+        builder = ModelBuilder()
+        inertia = np.diag([1.5, 2.5, 3.5]).astype(np.float32)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            body = builder.add_body(mass=1.0, inertia=inertia, armature=0.25)
+
+        self.assertEqual(body, 0)
+        self.assertEqual(len(caught), 1)
+        self.assertTrue(issubclass(caught[0].category, DeprecationWarning))
+        self.assertIn("add_body(..., armature=...)", str(caught[0].message))
+        self.assertTrue(caught[0].filename.endswith("test_model.py"))
+        np.testing.assert_allclose(
+            np.asarray(builder.body_inertia[body]).reshape(3, 3),
+            inertia + np.eye(3, dtype=np.float32) * 0.25,
+            atol=1e-6,
+        )
+
+    def test_add_link_uses_default_body_armature_without_extra_warning(self):
+        builder = ModelBuilder()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            builder.default_body_armature = 0.125
+            body = builder.add_link()
+
+        self.assertEqual(body, 0)
+        self.assertEqual(len(caught), 1)
+        self.assertTrue(issubclass(caught[0].category, DeprecationWarning))
+        self.assertIn("default_body_armature", str(caught[0].message))
+        self.assertTrue(caught[0].filename.endswith("test_model.py"))
+        np.testing.assert_allclose(
+            np.asarray(builder.body_inertia[body]).reshape(3, 3),
+            np.eye(3, dtype=np.float32) * 0.125,
+            atol=1e-6,
+        )
 
 
 class TestModelMesh(unittest.TestCase):
@@ -134,6 +198,13 @@ class TestModelMesh(unittest.TestCase):
             return np.array(sorted(x))
 
         builder = ModelBuilder()
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="approx_attr",
+                frequency=newton.Model.AttributeFrequency.SHAPE,
+                dtype=wp.float32,
+            )
+        )
         tf = wp.transform(wp.vec3(1.0, 2.0, 3.0), wp.quat_identity())
         scale = wp.vec3(1.0, 3.0, 0.2)
         mesh = box_mesh(scale=scale, transform=tf)
@@ -162,19 +233,96 @@ class TestModelMesh(unittest.TestCase):
         assert_np_equal(np.array(builder.shape_transform[s2]), np.array(tf), tol=1.0e-4)
 
         # test keep_visual_shapes
-        s3 = builder.add_shape_mesh(body=-1, mesh=mesh)
+        keep_visual_color = (0.1, 0.2, 0.3)
+        keep_visual_attr = 1.25
+        s3 = builder.add_shape_mesh(
+            body=-1,
+            mesh=mesh,
+            color=keep_visual_color,
+            label="mesh_keep_visual",
+            custom_attributes={"approx_attr": keep_visual_attr},
+        )
         builder.approximate_meshes(method="convex_hull", shape_indices=[s3], keep_visual_shapes=True)
         # approximation is created, but not visible
         self.assertEqual(len(builder.shape_source[s3].vertices), 5)
         self.assertEqual(builder.shape_type[s3], newton.GeoType.CONVEX_MESH)
         self.assertEqual(builder.shape_flags[s3] & newton.ShapeFlags.VISIBLE, 0)
         # a new visual shape is created
-        self.assertIs(builder.shape_source[s3 + 1], mesh)
-        self.assertEqual(builder.shape_flags[s3 + 1] & newton.ShapeFlags.VISIBLE, newton.ShapeFlags.VISIBLE)
+        visual_shape = s3 + 1
+        self.assertIs(builder.shape_source[visual_shape], mesh)
+        self.assertEqual(builder.shape_flags[visual_shape] & newton.ShapeFlags.VISIBLE, newton.ShapeFlags.VISIBLE)
+        self.assertEqual(builder.shape_label[visual_shape], "mesh_keep_visual_visual")
+        np.testing.assert_allclose(
+            np.asarray(builder.shape_color[visual_shape], dtype=np.float32),
+            keep_visual_color,
+            atol=1e-6,
+            rtol=1e-6,
+        )
 
         # make sure the original mesh is not modified
         self.assertEqual(len(mesh.vertices), 8)
         self.assertEqual(len(mesh.indices), 36)
+
+        model = builder.finalize(device="cpu")
+        self.assertAlmostEqual(model.approx_attr.numpy()[visual_shape], keep_visual_attr, places=6)
+
+    def test_mesh_approximation_convex_decomposition_preserves_visual_properties(self):
+        builder = ModelBuilder()
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="approx_attr",
+                frequency=newton.Model.AttributeFrequency.SHAPE,
+                dtype=wp.float32,
+            )
+        )
+        mesh = newton.Mesh.create_box(
+            1.0,
+            1.0,
+            1.0,
+            duplicate_vertices=False,
+            compute_normals=False,
+            compute_uvs=False,
+            compute_inertia=False,
+        )
+        shape_color = (0.7, 0.2, 0.9)
+        shape_label = "mesh_decomp"
+        shape_attr = 2.5
+        shape = builder.add_shape_mesh(
+            body=-1,
+            mesh=mesh,
+            color=shape_color,
+            label=shape_label,
+            custom_attributes={"approx_attr": shape_attr},
+        )
+
+        class FakeCoacdMesh:
+            def __init__(self, vertices, faces):
+                self.vertices = vertices
+                self.faces = faces
+
+        fake_coacd = SimpleNamespace(
+            Mesh=FakeCoacdMesh,
+            run_coacd=lambda _mesh, **_kwargs: [
+                (mesh.vertices.copy(), mesh.indices.copy()),
+                (mesh.vertices.copy(), mesh.indices.copy()),
+            ],
+        )
+
+        with mock.patch.dict(sys.modules, {"coacd": fake_coacd}):
+            builder.approximate_meshes(method="coacd", shape_indices=[shape], raise_on_failure=True)
+
+        extra_shape = shape + 1
+        self.assertEqual(builder.shape_type[extra_shape], newton.GeoType.CONVEX_MESH)
+        self.assertEqual(builder.shape_label[extra_shape], f"{shape_label}_convex_1")
+        np.testing.assert_allclose(
+            np.asarray(builder.shape_color[extra_shape], dtype=np.float32),
+            shape_color,
+            atol=1e-6,
+            rtol=1e-6,
+        )
+
+        model = builder.finalize(device="cpu")
+        self.assertAlmostEqual(model.approx_attr.numpy()[extra_shape], shape_attr, places=6)
 
     def test_approximate_meshes_collision_filter_child_bodies(self):
         def normalize_pair(a, b):
@@ -345,6 +493,108 @@ class TestModelMesh(unittest.TestCase):
         self.assertIn((shape0, shape2), model.shape_collision_filter_pairs)
         self.assertIn((shape1, shape2), model.shape_collision_filter_pairs)
 
+    def test_collision_filter_fixed_to_world(self):
+        """Bodies fixed to world via add_joint_fixed(parent=-1) should auto-filter
+        their shapes against world-static shapes regardless of construction order
+        (issue #2201)."""
+
+        def joint_first():
+            b = ModelBuilder()
+            body = b.add_link()
+            b.add_joint_fixed(parent=-1, child=body)
+            mesh_shape = b.add_shape_sphere(body=body, radius=0.5)
+            ground_shape = b.add_ground_plane()
+            return b, mesh_shape, ground_shape
+
+        def world_shape_first():
+            b = ModelBuilder()
+            ground_shape = b.add_ground_plane()
+            body = b.add_link()
+            b.add_joint_fixed(parent=-1, child=body)
+            mesh_shape = b.add_shape_sphere(body=body, radius=0.5)
+            return b, mesh_shape, ground_shape
+
+        def body_shape_first():
+            b = ModelBuilder()
+            body = b.add_link()
+            mesh_shape = b.add_shape_sphere(body=body, radius=0.5)
+            b.add_joint_fixed(parent=-1, child=body)
+            ground_shape = b.add_ground_plane()
+            return b, mesh_shape, ground_shape
+
+        for case_name, build in (
+            ("joint before shapes", joint_first),
+            ("world shape before joint", world_shape_first),
+            ("body shape before joint", body_shape_first),
+        ):
+            with self.subTest(case=case_name):
+                builder, mesh_shape, ground_shape = build()
+                pair = (min(mesh_shape, ground_shape), max(mesh_shape, ground_shape))
+                self.assertEqual(builder.shape_collision_filter_pairs.count(pair), 1)
+
+    def test_collision_filter_floating_base_not_filtered(self):
+        """Floating-base bodies (FREE joint to world) must NOT be filtered against
+        world shapes — they need to be able to land on the ground."""
+
+        builder = ModelBuilder()
+        body = builder.add_link()
+        builder.add_joint_free(parent=-1, child=body)
+        base_shape = builder.add_shape_sphere(body=body, radius=0.5)
+        ground_shape = builder.add_ground_plane()
+        pair = (min(base_shape, ground_shape), max(base_shape, ground_shape))
+        self.assertNotIn(pair, builder.shape_collision_filter_pairs)
+
+    def test_collision_filter_revolute_to_world_default(self):
+        """A revolute (non-fixed) joint to world does NOT auto-filter child shapes
+        against world shapes — the child needs to be able to collide with world
+        geometry (e.g. a pendulum hitting the ground)."""
+
+        builder = ModelBuilder()
+        body = builder.add_link()
+        builder.add_joint_revolute(parent=-1, child=body, axis=newton.Axis.Z)
+        body_shape = builder.add_shape_sphere(body=body, radius=0.5)
+        ground_shape = builder.add_ground_plane()
+        pair = (min(body_shape, ground_shape), max(body_shape, ground_shape))
+        self.assertNotIn(pair, builder.shape_collision_filter_pairs)
+
+    def test_collision_filter_revolute_to_world_explicit(self):
+        """Explicit collision_filter_parent=True is honored even for a non-fixed
+        joint to world (overrides the smart default) when shapes exist at
+        joint-creation time."""
+
+        builder = ModelBuilder()
+        body = builder.add_link()
+        body_shape = builder.add_shape_sphere(body=body, radius=0.5)
+        ground_shape = builder.add_ground_plane()
+        builder.add_joint_revolute(parent=-1, child=body, axis=newton.Axis.Z, collision_filter_parent=True)
+        pair = (min(body_shape, ground_shape), max(body_shape, ground_shape))
+        self.assertEqual(builder.shape_collision_filter_pairs.count(pair), 1)
+
+    def test_collision_filter_free_with_real_parent_default_filtered(self):
+        """A free joint between two real bodies auto-filters parent/child shape pairs by
+        default, matching the legacy behavior for joints between real bodies."""
+
+        builder = ModelBuilder()
+        parent = builder.add_link()
+        child = builder.add_link()
+        parent_shape = builder.add_shape_sphere(body=parent, radius=0.5)
+        child_shape = builder.add_shape_sphere(body=child, radius=0.5)
+        builder.add_joint_free(parent=parent, child=child)
+        pair = (min(parent_shape, child_shape), max(parent_shape, child_shape))
+        self.assertEqual(builder.shape_collision_filter_pairs.count(pair), 1)
+
+    def test_collision_filter_fixed_to_world_opt_out(self):
+        """collision_filter_parent=False on the joint suppresses the auto-filter
+        when shapes already exist on both sides at joint-creation time."""
+
+        builder = ModelBuilder()
+        body = builder.add_link()
+        mesh_shape = builder.add_shape_sphere(body=body, radius=0.5)
+        ground_shape = builder.add_ground_plane()
+        builder.add_joint_fixed(parent=-1, child=body, collision_filter_parent=False)
+        pair = (min(mesh_shape, ground_shape), max(mesh_shape, ground_shape))
+        self.assertNotIn(pair, builder.shape_collision_filter_pairs)
+
     def test_validate_structure_invalid_shape_body(self):
         """Test that _validate_structure catches invalid shape_body references."""
         builder = ModelBuilder()
@@ -421,11 +671,48 @@ class TestModelJoints(unittest.TestCase):
         builder.add_articulation(all_joints)
         assert builder.articulation_count == 3  # Three articulations total
 
-        builder.collapse_fixed_joints()
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="articulation_name",
+                dtype=str,
+                frequency=newton.Model.AttributeFrequency.ARTICULATION,
+                default="",
+                values={0: "fixed", 1: "revolute", 2: "free"},
+            )
+        )
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="articulation_ref",
+                dtype=wp.int32,
+                frequency=newton.Model.AttributeFrequency.ONCE,
+                references="articulation",
+                default=-1,
+                values={0: [1, (2, -1)]},
+            )
+        )
+        builder.add_custom_attribute(
+            ModelBuilder.CustomAttribute(
+                name="articulation_ref_wp",
+                dtype=wp.int32,
+                frequency=newton.Model.AttributeFrequency.ONCE,
+                references="articulation",
+                default=wp.int32(-1),
+                values={0: [wp.int32(1), (wp.int32(2), wp.int32(-1))]},
+            )
+        )
+
+        collapse_results = builder.collapse_fixed_joints()
 
         assert builder.joint_count == 2
         assert builder.articulation_count == 2
+        assert collapse_results["articulation_remap"] == {1: 0, 2: 1}
         assert builder.articulation_start == [0, 1]
+        assert builder.articulation_label == ["articulation_1", "articulation_2"]
+        assert builder.articulation_world == [-1, -1]
+        assert builder.joint_articulation == [0, 1]
+        assert builder.custom_attributes["articulation_name"].values == {0: "revolute", 1: "free"}
+        assert builder.custom_attributes["articulation_ref"].values == {0: [0, (1, -1)]}
+        assert builder.custom_attributes["articulation_ref_wp"].values == {0: [0, (1, -1)]}
         assert builder.joint_type == [newton.JointType.REVOLUTE, newton.JointType.FREE]
         assert builder.shape_count == 11
         assert builder.shape_body == [-1, -1, -1, -1, -1, -1, 0, 1, 1, 1, 1]

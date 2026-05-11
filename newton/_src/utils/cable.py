@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 from __future__ import annotations
 
@@ -26,47 +14,53 @@ from ..math import quat_between_vectors_robust
 def create_cable_stiffness_from_elastic_moduli(
     youngs_modulus: float,
     radius: float,
+    segment_length: float,
 ) -> tuple[float, float]:
-    """Create rod/cable stiffness parameters from elastic moduli (circular cross-section).
+    """Create per-joint rod/cable stiffness parameters from elastic moduli.
 
-    This returns the *material-like* stiffness values expected by `ModelBuilder.add_rod()` /
-    `ModelBuilder.add_rod_graph()`:
+    For a circular cross-section, this computes material stiffnesses and converts them to the
+    per-joint stiffness values expected by ``ModelBuilder.add_rod()`` and
+    ``ModelBuilder.add_rod_graph()``:
 
-    - stretch_stiffness = E * A  [N]
-    - bend_stiffness = E * I     [N*m^2]
+    - stretch_stiffness = E * A / L  [N/m]
+    - bend_stiffness = E * I / L     [N*m]
 
     where:
     - A = pi * r^2
     - I = (pi * r^4) / 4  (area moment of inertia for a solid circular rod)
-
-    Note: Newton internally converts these into per-joint effective stiffnesses by dividing by
-    segment length. This helper intentionally does *not* perform any length normalization.
+    - L = segment_length
 
     Args:
         youngs_modulus: Young's modulus E in Pascals [N/m^2].
         radius: Rod/cable radius r in meters.
+        segment_length: Segment length L in meters.
 
     Returns:
-        Tuple `(stretch_stiffness, bend_stiffness)` = `(E*A, E*I)`.
+        Tuple `(stretch_stiffness, bend_stiffness)` = `(E*A/L, E*I/L)`.
     """
     # Accept ints / numpy scalars, but return plain Python floats.
     E = float(youngs_modulus)
     r = float(radius)
+    L = float(segment_length)
 
     if not math.isfinite(E):
         raise ValueError("youngs_modulus must be finite")
     if not math.isfinite(r):
         raise ValueError("radius must be finite")
+    if not math.isfinite(L):
+        raise ValueError("segment_length must be finite")
 
     if E < 0.0:
         raise ValueError("youngs_modulus must be >= 0")
     if r <= 0.0:
         raise ValueError("radius must be > 0")
+    if L <= 0.0:
+        raise ValueError("segment_length must be > 0")
 
     area = math.pi * r * r
     inertia = 0.25 * math.pi * r**4
 
-    return E * area, E * inertia
+    return E * area / L, E * inertia / L
 
 
 def create_straight_cable_points(

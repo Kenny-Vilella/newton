@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 ###########################################################################
 # Example SDF Mesh Collision
@@ -28,6 +16,7 @@ import warp as wp
 
 import newton
 import newton.examples
+from newton.geometry import HydroelasticSDF
 
 # Assembly type for the nut and bolt
 ASSEMBLY_STR = "m20_loose"
@@ -35,7 +24,7 @@ ASSEMBLY_STR = "m20_loose"
 ISAACGYM_ENVS_REPO_URL = "https://github.com/isaac-sim/IsaacGymEnvs.git"
 ISAACGYM_NUT_BOLT_FOLDER = "assets/factory/mesh/factory_nut_bolt"
 
-SDF_MAX_RESOLUTION = 256
+SDF_MAX_RESOLUTION = 128
 SDF_NARROW_BAND_RANGE = (-0.005, 0.005)
 
 SHAPE_CFG = newton.ModelBuilder.ShapeConfig(
@@ -127,7 +116,8 @@ class Example:
         self.fps = 120
         self.frame_dt = 1.0 / self.fps
         self.sim_time = 0.0
-        self.sim_substeps = 5
+        self.sim_substeps = 4
+        self.collide_every = 2 if args.solver == "mujoco" else 1  # re-collide every K substeps
         self.sim_dt = self.frame_dt / self.sim_substeps
 
         self.world_count = args.world_count
@@ -151,7 +141,7 @@ class Example:
 
         # Maximum number of rigid contacts to allocate (limits memory usage)
         # None = auto-calculate (can be very large), or set explicit limit (e.g., 1_000_000)
-        self.rigid_contact_max = 100000
+        self.rigid_contact_max = 40_000
 
         # Broad phase mode: NXN (O(N²)), SAP (O(N log N)), EXPLICIT (precomputed pairs)
         self.broad_phase_mode = "sap"
@@ -173,11 +163,19 @@ class Example:
 
         self.model = main_scene.finalize()
 
+        # Disable the marching-cubes edge clamp — threading dynamics on the
+        # M20 helix are sensitive to the contact-surface vertex bias the clamp
+        # introduces.
+        sdf_hydroelastic_config = HydroelasticSDF.Config(
+            mc_edge_clamp_min=0.0,
+        )
+
         self.collision_pipeline = newton.CollisionPipeline(
             self.model,
             reduce_contacts=True,
             rigid_contact_max=self.rigid_contact_max,
             broad_phase=self.broad_phase_mode,
+            sdf_hydroelastic_config=sdf_hydroelastic_config,
         )
 
         # Create solver based on user choice
@@ -210,7 +208,8 @@ class Example:
 
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
 
-        self.contacts = self.model.collide(self.state_0, collision_pipeline=self.collision_pipeline)
+        self.contacts = self.collision_pipeline.contacts()
+        self.collision_pipeline.collide(self.state_0, self.contacts)
 
         self.viewer.set_model(self.model)
 
@@ -295,8 +294,11 @@ class Example:
             self.graph = None
 
     def simulate(self):
-        self.contacts = self.model.collide(self.state_0, collision_pipeline=self.collision_pipeline)
-        for _ in range(self.sim_substeps):
+        for sub in range(self.sim_substeps):
+            # Refresh contacts every K substeps so contact normals stay
+            # aligned with the threading rotation.
+            if sub % self.collide_every == 0:
+                self.collision_pipeline.collide(self.state_0, self.contacts)
             self.state_0.clear_forces()
 
             self.viewer.apply_forces(self.state_0)
@@ -437,6 +439,4 @@ if __name__ == "__main__":
     parser = Example.create_parser()
     viewer, args = newton.examples.init(parser)
 
-    example = Example(viewer, args)
-
-    newton.examples.run(example, args)
+    newton.examples.run(Example(viewer, args), args)

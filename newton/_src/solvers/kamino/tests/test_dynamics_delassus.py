@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Unit tests for the DelassusOperator class"""
 
@@ -143,7 +131,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -177,7 +164,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -210,7 +196,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -247,7 +232,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -314,7 +298,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -394,7 +377,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -463,7 +445,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -543,7 +524,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -625,9 +605,7 @@ class TestDelassusOperator(unittest.TestCase):
         model, data, state, limits, detector, jacobians_dense = make_containers(
             builder=builder, max_world_contacts=max_world_contacts, device=self.default_device, sparse=False
         )
-        jacobians_sparse = SparseSystemJacobians(
-            model=model, limits=limits, contacts=detector.contacts, device=self.default_device
-        )
+        jacobians_sparse = SparseSystemJacobians(model=model, limits=limits, contacts=detector.contacts)
 
         # Update the containers
         update_containers(model, data, state, limits, detector, jacobians_dense)
@@ -639,7 +617,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
         delassus_sparse = DelassusOperator(
@@ -647,7 +624,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -685,9 +661,7 @@ class TestDelassusOperator(unittest.TestCase):
         model, data, state, limits, detector, jacobians_dense = make_containers(
             builder=builder, max_world_contacts=max_world_contacts, device=self.default_device, sparse=False
         )
-        jacobians_sparse = SparseSystemJacobians(
-            model=model, limits=limits, contacts=detector.contacts, device=self.default_device
-        )
+        jacobians_sparse = SparseSystemJacobians(model=model, limits=limits, contacts=detector.contacts)
 
         # Update the containers
         update_containers(model, data, state, limits, detector, jacobians_dense)
@@ -699,7 +673,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
         delassus_sparse = DelassusOperator(
@@ -707,7 +680,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -743,9 +715,7 @@ class TestDelassusOperator(unittest.TestCase):
         model, data, state, limits, detector, jacobians_dense = make_containers(
             builder=builder, max_world_contacts=max_world_contacts, device=self.default_device, sparse=False
         )
-        jacobians_sparse = SparseSystemJacobians(
-            model=model, limits=limits, contacts=detector.contacts, device=self.default_device
-        )
+        jacobians_sparse = SparseSystemJacobians(model=model, limits=limits, contacts=detector.contacts)
 
         # Update the containers
         update_containers(model, data, state, limits, detector, jacobians_dense)
@@ -757,7 +727,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
         delassus_sparse = DelassusOperator(
@@ -765,7 +734,6 @@ class TestDelassusOperator(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
             solver=LLTSequentialSolver,
         )
 
@@ -1186,7 +1154,7 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
+            jacobians=jacobians,
         )
 
         # Compare expected to allocated dimensions and sizes
@@ -1214,7 +1182,7 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
+            jacobians=jacobians,
         )
 
         # Compare expected to allocated dimensions and sizes
@@ -1241,7 +1209,7 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             data=data,
             limits=limits,
             contacts=detector.contacts,
-            device=self.default_device,
+            jacobians=jacobians,
         )
 
         # Compare expected to allocated dimensions and sizes
@@ -1271,7 +1239,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1300,7 +1267,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1328,7 +1294,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1358,7 +1323,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1387,7 +1351,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1415,7 +1378,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1445,7 +1407,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1474,7 +1435,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix
@@ -1502,7 +1462,6 @@ class TestDelassusOperatorSparse(unittest.TestCase):
             limits=limits,
             contacts=detector.contacts,
             jacobians=jacobians,
-            device=self.default_device,
         )
 
         # Check that the Delassus operator represents the actual Delassus matrix

@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 from __future__ import annotations
 
@@ -44,7 +32,7 @@ def _projected_yaw(q: wp.quat) -> float:
 
 
 @wp.func
-def _write_vec3(obs: wp.array(dtype=wp.float32), idx: int, v: wp.vec3):
+def _write_vec3(obs: wp.array[wp.float32], idx: int, v: wp.vec3):
     obs[idx + 0] = v[0]
     obs[idx + 1] = v[1]
     obs[idx + 2] = v[2]
@@ -83,18 +71,18 @@ _OBS_NAMES = [
 
 @wp.kernel
 def _compute_bipedal_obs_core(
-    obs: wp.array(dtype=wp.float32),
-    q_i: wp.array(dtype=wp.float32),
-    u_i: wp.array(dtype=wp.float32),
-    q_j: wp.array(dtype=wp.float32),
-    dq_j: wp.array(dtype=wp.float32),
-    command: wp.array(dtype=wp.float32),
-    phase: wp.array(dtype=wp.float32),
-    freq_2pi: wp.array(dtype=wp.float32),
-    offset_enc: wp.array(dtype=wp.float32),
-    joint_default: wp.array(dtype=wp.float32),
-    joint_range: wp.array(dtype=wp.float32),
-    obs_offsets: wp.array(dtype=wp.int32),
+    obs: wp.array[wp.float32],
+    q_i: wp.array[wp.float32],
+    u_i: wp.array[wp.float32],
+    q_j: wp.array[wp.float32],
+    dq_j: wp.array[wp.float32],
+    command: wp.array[wp.float32],
+    phase: wp.array[wp.float32],
+    freq_2pi: wp.array[wp.float32],
+    offset_enc: wp.array[wp.float32],
+    joint_default: wp.array[wp.float32],
+    joint_range: wp.array[wp.float32],
+    obs_offsets: wp.array[wp.int32],
     num_bodies: int,
     num_joint_coords: int,
     num_joint_dofs: int,
@@ -223,7 +211,7 @@ def _projected_yaw(q: wp.quat) -> float:
 
 
 @wp.func
-def _write_vec3(obs: wp.array(dtype=wp.float32), idx: int, v: wp.vec3):
+def _write_vec3(obs: wp.array[wp.float32], idx: int, v: wp.vec3):
     obs[idx + 0] = v[0]
     obs[idx + 1] = v[1]
     obs[idx + 2] = v[2]
@@ -262,18 +250,18 @@ _OBS_NAMES = [
 
 @wp.kernel
 def _compute_bipedal_obs_core(
-    obs: wp.array(dtype=wp.float32),
-    q_i: wp.array(dtype=wp.float32),
-    u_i: wp.array(dtype=wp.float32),
-    q_j: wp.array(dtype=wp.float32),
-    dq_j: wp.array(dtype=wp.float32),
-    command: wp.array(dtype=wp.float32),
-    phase: wp.array(dtype=wp.float32),
-    freq_2pi: wp.array(dtype=wp.float32),
-    offset_enc: wp.array(dtype=wp.float32),
-    joint_default: wp.array(dtype=wp.float32),
-    joint_range: wp.array(dtype=wp.float32),
-    obs_offsets: wp.array(dtype=wp.int32),
+    obs: wp.array[wp.float32],
+    q_i: wp.array[wp.float32],
+    u_i: wp.array[wp.float32],
+    q_j: wp.array[wp.float32],
+    dq_j: wp.array[wp.float32],
+    command: wp.array[wp.float32],
+    phase: wp.array[wp.float32],
+    freq_2pi: wp.array[wp.float32],
+    offset_enc: wp.array[wp.float32],
+    joint_default: wp.array[wp.float32],
+    joint_range: wp.array[wp.float32],
+    obs_offsets: wp.array[wp.int32],
     num_bodies: int,
     num_joint_coords: int,
     num_joint_dofs: int,

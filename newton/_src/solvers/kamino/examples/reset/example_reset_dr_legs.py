@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import argparse
 import os
@@ -41,11 +29,11 @@ from newton._src.solvers.kamino.examples import get_examples_output_path, run_he
 
 @wp.kernel
 def _test_control_callback(
-    sim_has_started_resets: wp.array(dtype=wp.bool),
-    sim_reset_index: wp.array(dtype=wp.int32),
-    actuated_joint_idx: wp.array(dtype=int32),
-    state_t: wp.array(dtype=float32),
-    control_tau_j: wp.array(dtype=float32),
+    sim_has_started_resets: wp.array[wp.bool],
+    sim_reset_index: wp.array[wp.int32],
+    actuated_joint_idx: wp.array[int32],
+    state_t: wp.array[float32],
+    control_tau_j: wp.array[float32],
 ):
     """
     An example control callback kernel.
@@ -102,10 +90,11 @@ class Example:
         async_save: bool = False,
     ):
         # Initialize target frames per second and corresponding time-steps
-        self.fps = 60
-        self.sim_dt = 0.001
+        self.fps = 50
         self.frame_dt = 1.0 / self.fps
-        self.sim_substeps = max(1, round(self.frame_dt / self.sim_dt))
+        self.sim_substeps = max(1, round(self.frame_dt / 0.001))
+        self.sim_dt = self.frame_dt / self.sim_substeps
+        msg.info(f"Using sim_dt = {self.sim_dt} ({self.sim_substeps} substeps per frame)")
         self.max_steps = max_steps
 
         # Define internal counters
@@ -168,7 +157,7 @@ class Example:
         # Create a list of actuated joint indices from the model and builder
         self.actuated_joint_idx_np = np.zeros(shape=(self.sim.model.size.sum_of_num_actuated_joints,), dtype=np.int32)
         jidx = 0
-        for j, joint in enumerate(self.builder.joints):
+        for j, joint in enumerate(self.builder.all_joints):
             if joint.is_actuated:
                 self.actuated_joint_idx_np[jidx] = j
                 jidx += 1
@@ -199,6 +188,7 @@ class Example:
                     sim.solver.data.time.time,
                     sim.data.control.tau_j,
                 ],
+                device=sim._device,
             )
 
         # Set the test control callback into the simulator
@@ -230,14 +220,14 @@ class Example:
         self.step_graph = None
         self.simulate_graph = None
 
-        # Capture CUDA graph if requested and available
-        self.capture()
-
         # Warm-start the simulator before rendering
         # NOTE: This compiles and loads the warp kernels prior to execution
         msg.notif("Warming up simulator...")
         self.step_once()
         self.reset()
+
+        # Capture CUDA graph if requested and available
+        self.capture()
 
     def capture(self):
         """Capture CUDA graph if requested and available."""

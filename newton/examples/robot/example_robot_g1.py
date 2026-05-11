@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 ###########################################################################
 # Example Robot G1
@@ -155,6 +143,7 @@ class Example:
             "all bodies are above the ground",
             lambda q, qd: q[2] > 0.0,
         )
+        # fmt: off
         newton.examples.test_body_state(
             self.model,
             self.state_0,
@@ -162,6 +151,7 @@ class Example:
             lambda q, qd: max(abs(qd))
             < 0.015,  # Relaxed from 0.005 - G1 has higher residual velocities with collision pipeline
         )
+        # fmt: on
 
     @staticmethod
     def create_parser():
@@ -176,6 +166,4 @@ if __name__ == "__main__":
     parser = Example.create_parser()
     viewer, args = newton.examples.init(parser)
 
-    example = Example(viewer, args)
-
-    newton.examples.run(example, args)
+    newton.examples.run(Example(viewer, args), args)

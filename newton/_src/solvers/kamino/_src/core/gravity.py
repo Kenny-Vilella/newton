@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """The gravity descriptor and model used throughout Kamino"""
 
@@ -243,14 +231,14 @@ def convert_model_gravity(model_in: Model, gravity_out: GravityModel | None = No
     # correct shape and type, and copy the converted data into them.
     else:
         # Ensure that the output GravityModel has allocated arrays of the correct shape and type
-        if gravity_out.g_dir_acc is None or gravity_out.g_dir_acc.shape != (model_in.world_count, 4):
+        if gravity_out.g_dir_acc is None or gravity_out.g_dir_acc.shape != (model_in.world_count,):
             msg.warning("Output `GravityModel.g_dir_acc` array does not have matching shape. Allocating a new array.")
-            gravity_out.g_dir_acc = wp.array(g_dir_acc_np, dtype=vec4f)
+            gravity_out.g_dir_acc = wp.array(g_dir_acc_np, dtype=vec4f, device=model_in.device)
         else:
             gravity_out.g_dir_acc.assign(g_dir_acc_np)
-        if gravity_out.vector is None or gravity_out.vector.shape != (model_in.world_count, 4):
+        if gravity_out.vector is None or gravity_out.vector.shape != (model_in.world_count,):
             msg.warning("Output `GravityModel.vector` array does not have matching shape. Allocating a new array.")
-            gravity_out.vector = wp.array(vector_np, dtype=vec4f)
+            gravity_out.vector = wp.array(vector_np, dtype=vec4f, device=model_in.device)
         else:
             gravity_out.vector.assign(vector_np)
 

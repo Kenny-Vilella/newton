@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Tests for parent forces (body_parent_f) extended state attribute.
@@ -227,6 +215,30 @@ for device in devices:
         test_apply_body_f,
         devices=[device],
         solver_fn=lambda model: newton.solvers.SolverMuJoCo(model, use_mujoco_cpu=False),
+    )
+
+    # Featherstone uses the same RNEA math under the hood, so the same
+    # one-step assertions apply with the same tolerances.
+    add_function_test(
+        TestParentForce,
+        "test_parent_force_static_pendulum_featherstone",
+        test_parent_force_static_pendulum,
+        devices=[device],
+        solver_fn=newton.solvers.SolverFeatherstone,
+    )
+    add_function_test(
+        TestParentForce,
+        "test_parent_force_centrifugal_featherstone",
+        test_parent_force_centrifugal,
+        devices=[device],
+        solver_fn=newton.solvers.SolverFeatherstone,
+    )
+    add_function_test(
+        TestParentForce,
+        "test_apply_body_f_featherstone",
+        test_apply_body_f,
+        devices=[device],
+        solver_fn=newton.solvers.SolverFeatherstone,
     )
 
 

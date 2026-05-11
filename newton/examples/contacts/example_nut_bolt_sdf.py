@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 ###########################################################################
 # Example SDF Mesh Collision
@@ -21,6 +9,9 @@
 # Command: python -m newton.examples nut_bolt_sdf
 #
 ###########################################################################
+
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import trimesh
@@ -48,6 +39,9 @@ SHAPE_CFG = newton.ModelBuilder.ShapeConfig(
 )
 MESH_SDF_MAX_RESOLUTION = 512
 MESH_SDF_NARROW_BAND_RANGE = (-0.005, 0.005)
+# Persist cooked SDFs across runs so the (slow) cook only happens once.
+# Entries are content-addressed, so leftovers from older runs are harmless.
+MESH_SDF_CACHE_DIR = Path(tempfile.gettempdir()) / "newton_sdf_cache"
 
 
 def add_mesh_object(
@@ -90,6 +84,7 @@ def load_mesh_with_sdf(
         max_resolution=MESH_SDF_MAX_RESOLUTION,
         narrow_band_range=MESH_SDF_NARROW_BAND_RANGE,
         margin=shape_cfg.gap if shape_cfg and shape_cfg.gap is not None else 0.05,
+        cache_dir=MESH_SDF_CACHE_DIR,
     )
     return mesh, center_vec
 
@@ -405,6 +400,4 @@ if __name__ == "__main__":
 
     viewer, args = newton.examples.init(parser)
 
-    example = Example(viewer, args)
-
-    newton.examples.run(example, args)
+    newton.examples.run(Example(viewer, args), args)

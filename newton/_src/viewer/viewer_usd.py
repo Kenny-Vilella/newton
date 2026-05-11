@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 from __future__ import annotations
 
@@ -23,7 +11,7 @@ import warp as wp
 
 import newton
 
-from ..core.types import nparray, override
+from ..core.types import override
 
 try:
     from pxr import Gf, Sdf, Usd, UsdGeom, Vt
@@ -219,13 +207,16 @@ class ViewerUSD(ViewerBase):
     def log_mesh(
         self,
         name: str,
-        points: wp.array(dtype=wp.vec3),
-        indices: wp.array(dtype=wp.int32) | wp.array(dtype=wp.uint32),
-        normals: wp.array(dtype=wp.vec3) | None = None,
-        uvs: wp.array(dtype=wp.vec2) | None = None,
+        points: wp.array[wp.vec3],
+        indices: wp.array[wp.int32] | wp.array[wp.uint32],
+        normals: wp.array[wp.vec3] | None = None,
+        uvs: wp.array[wp.vec2] | None = None,
         texture: np.ndarray | str | None = None,
         hidden: bool = False,
         backface_culling: bool = True,
+        color: tuple[float, float, float] | None = None,
+        roughness: float | None = None,
+        metallic: float | None = None,
     ):
         """
         Create a USD mesh prototype from vertex and index data.
@@ -239,6 +230,12 @@ class ViewerUSD(ViewerBase):
             texture: Optional texture path/URL or image array.
             hidden: If True, mesh will be hidden.
             backface_culling: If True, enable backface culling.
+            color: Optional base color as an RGB tuple with values in
+                [0, 1]. Used when no texture is provided.
+            roughness: Surface roughness in ``[0, 1]``. ``0`` is perfectly
+                smooth, ``1`` is fully rough.
+            metallic: Metallicity in ``[0, 1]``. ``0`` is dielectric, ``1``
+                is metal.
         """
 
         # Convert warp arrays to numpy
@@ -282,10 +279,10 @@ class ViewerUSD(ViewerBase):
         self,
         name: str,
         mesh: str,
-        xforms: wp.array(dtype=wp.transform) | None,
-        scales: wp.array(dtype=wp.vec3) | None,
-        colors: wp.array(dtype=wp.vec3) | None,
-        materials: wp.array(dtype=wp.vec4) | None,
+        xforms: wp.array[wp.transform] | None,
+        scales: wp.array[wp.vec3] | None,
+        colors: wp.array[wp.vec3] | None,
+        materials: wp.array[wp.vec4] | None,
         hidden: bool = False,
     ):
         """
@@ -348,17 +345,12 @@ class ViewerUSD(ViewerBase):
         self,
         name: str,
         mesh: str,
-        xforms: wp.array(dtype=wp.transform) | None,
-        scales: wp.array(dtype=wp.vec3) | nparray | None,
+        xforms: wp.array[wp.transform] | None,
+        scales: wp.array[wp.vec3] | np.ndarray | None,
         colors: (
-            wp.array(dtype=wp.vec3)
-            | wp.array(dtype=wp.float32)
-            | tuple[float, float, float]
-            | list[float]
-            | nparray
-            | None
+            wp.array[wp.vec3] | wp.array[wp.float32] | tuple[float, float, float] | list[float] | np.ndarray | None
         ),
-        materials: wp.array(dtype=wp.vec4) | None,
+        materials: wp.array[wp.vec4] | None,
     ):
         """
         Create or update a PointInstancer for mesh instances.
@@ -450,11 +442,9 @@ class ViewerUSD(ViewerBase):
     def log_lines(
         self,
         name: str,
-        starts: wp.array(dtype=wp.vec3) | None,
-        ends: wp.array(dtype=wp.vec3) | None,
-        colors: (
-            wp.array(dtype=wp.vec3) | wp.array(dtype=wp.float32) | tuple[float, float, float] | list[float] | None
-        ),
+        starts: wp.array[wp.vec3] | None,
+        ends: wp.array[wp.vec3] | None,
+        colors: (wp.array[wp.vec3] | wp.array[wp.float32] | tuple[float, float, float] | list[float] | None),
         width: float = 0.01,
         hidden: bool = False,
     ):
@@ -535,11 +525,9 @@ class ViewerUSD(ViewerBase):
     def log_points(
         self,
         name: str,
-        points: wp.array(dtype=wp.vec3) | None,
-        radii: wp.array(dtype=wp.float32) | float | None = None,
-        colors: (
-            wp.array(dtype=wp.vec3) | wp.array(dtype=wp.float32) | tuple[float, float, float] | list[float] | None
-        ) = None,
+        points: wp.array[wp.vec3] | None,
+        radii: wp.array[wp.float32] | float | None = None,
+        colors: (wp.array[wp.vec3] | wp.array[wp.float32] | tuple[float, float, float] | list[float] | None) = None,
         hidden: bool = False,
     ):
         """Log points as a USD `Points` primitive.
@@ -597,7 +585,7 @@ class ViewerUSD(ViewerBase):
         return instancer.GetPath()
 
     @override
-    def log_array(self, name: str, array: wp.array(dtype=Any) | nparray):
+    def log_array(self, name: str, array: wp.array[Any] | np.ndarray):
         """
         Log array data (not implemented for USD backend).
 
@@ -610,7 +598,7 @@ class ViewerUSD(ViewerBase):
         pass
 
     @override
-    def log_scalar(self, name: str, value: int | float | bool | np.number):
+    def log_scalar(self, name: str, value: int | float | bool | np.number, *, clear: bool = False, smoothing: int = 1):
         """
         Log scalar value (not implemented for USD backend).
 
@@ -619,6 +607,8 @@ class ViewerUSD(ViewerBase):
         Args:
             name: Unique path/name for the scalar signal.
             value: Scalar value to visualize.
+            clear: Ignored by this backend.
+            smoothing: Ignored by this backend.
         """
         pass
 

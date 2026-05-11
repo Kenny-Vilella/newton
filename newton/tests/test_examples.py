@@ -1,22 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Test examples in the newton.examples package.
 
-Currently, this script mainly checks that the examples can run. There are no
-correctness checks.
+Currently, this script mainly checks that the examples can run. It also treats
+deprecation warnings as failures by default so examples do not regress onto
+deprecated APIs.
 
 The test parameters are typically tuned so that each test can run in 10 seconds
 or less, ignoring module compilation time. A notable exception is the robot
@@ -117,12 +106,20 @@ def add_example_test(
         if usd_required and not USD_AVAILABLE:
             test.skipTest("Requires usd-core")
 
-        # Find the current Warp cache
+        # Deprecations should fail example tests by default. Opt out only for
+        # a known third-party or asset issue that still needs follow-up.
+        allow_deprecation_warnings = options.pop("allow_deprecation_warnings", False)
+
+        # Pass the parent dir; the subprocess's init_kernel_cache appends the version.
         warp_cache_path = wp.config.kernel_cache_dir
 
         env_vars = os.environ.copy()
         if warp_cache_path is not None:
-            env_vars["WARP_CACHE_PATH"] = warp_cache_path
+            env_vars["WARP_CACHE_PATH"] = os.path.dirname(warp_cache_path)
+        if not allow_deprecation_warnings:
+            env_vars["PYTHONWARNINGS"] = "error::DeprecationWarning"
+        else:
+            env_vars.pop("PYTHONWARNINGS", None)
 
         if newton.tests.unittest_utils.coverage_enabled:
             # Generate a random coverage data file name - file is deleted along with containing directory
@@ -233,7 +230,21 @@ add_example_test(
 
 add_example_test(TestBasicExamples, name="basic.example_basic_viewer", devices=test_devices, use_viewer=True)
 
-add_example_test(TestBasicExamples, name="basic.example_basic_joints", devices=test_devices, use_viewer=True)
+add_example_test(
+    TestBasicExamples,
+    name="basic.example_basic_joints",
+    devices=test_devices,
+    use_viewer=True,
+    test_suffix="xpbd",
+)
+add_example_test(
+    TestBasicExamples,
+    name="basic.example_basic_joints",
+    devices=test_devices,
+    use_viewer=True,
+    test_options={"solver": "vbd"},
+    test_suffix="vbd",
+)
 
 add_example_test(
     TestBasicExamples,
@@ -670,6 +681,30 @@ add_example_test(
     use_viewer=True,
 )
 
+add_example_test(
+    TestMPMExamples,
+    name="mpm.example_mpm_beam_twist",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 100},
+    use_viewer=True,
+)
+
+add_example_test(
+    TestMPMExamples,
+    name="mpm.example_mpm_snow_ball",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 30, "voxel-size": 0.2},
+    use_viewer=True,
+)
+
+add_example_test(
+    TestMPMExamples,
+    name="mpm.example_mpm_viscous",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 30, "voxel-size": 0.01},
+    use_viewer=True,
+)
+
 
 add_example_test(
     TestBasicExamples,
@@ -748,6 +783,47 @@ class TestSoftbodyExamples(unittest.TestCase):
 add_example_test(
     TestSoftbodyExamples,
     name="softbody.example_softbody_hanging",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 120},
+    use_viewer=True,
+)
+
+
+class TestKaminoExamples(unittest.TestCase):
+    pass
+
+
+add_example_test(
+    TestKaminoExamples,
+    name="kamino.example_kamino_basic_fourbar",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 120},
+    use_viewer=True,
+)
+add_example_test(
+    TestKaminoExamples,
+    name="kamino.example_kamino_basic_heterogeneous",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 120},
+    use_viewer=True,
+)
+add_example_test(
+    TestKaminoExamples,
+    name="kamino.example_kamino_basic_dr_testmech",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 120},
+    use_viewer=True,
+)
+add_example_test(
+    TestKaminoExamples,
+    name="kamino.example_kamino_robot_dr_legs",
+    devices=cuda_test_devices,
+    test_options={"num-frames": 120},
+    use_viewer=True,
+)
+add_example_test(
+    TestKaminoExamples,
+    name="kamino.example_kamino_robot_anymal_d",
     devices=cuda_test_devices,
     test_options={"num-frames": 120},
     use_viewer=True,

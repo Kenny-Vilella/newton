@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Defines the Kamino-specific data containers to hold time-varying simulation data."""
 
@@ -101,6 +89,17 @@ class DataKaminoInfo:
     Shape of ``(num_worlds,)`` and type :class:`int32`.
     """
 
+    ###
+    # Properties
+    ###
+
+    @property
+    def device(self) -> wp.DeviceLike:
+        """The device on which data is allocated."""
+        if self.num_total_cts is None:
+            raise RuntimeError("DataKaminoInfo has not been finalized.")
+        return self.num_total_cts.device
+
 
 @dataclass
 class DataKamino:
@@ -133,6 +132,17 @@ class DataKamino:
     """Time-varying data of geometries in the model: poses computed in world coordinates."""
 
     ###
+    # Properties
+    ###
+
+    @property
+    def device(self) -> wp.DeviceLike:
+        """The device on which data is allocated."""
+        if self.info is None:
+            raise RuntimeError("DataKamino has not been finalized.")
+        return self.info.device
+
+    ###
     # Operations
     ###
 
@@ -152,7 +162,7 @@ class DataKamino:
         if self.bodies is None:
             raise RuntimeError("DataKamino.bodies is not finalized.")
 
-        # Update rigid bodies data from the model state
+        # Copy rigid bodies data from the source state container
         wp.copy(self.bodies.q_i, state.q_i)
         wp.copy(self.bodies.u_i, state.u_i)
 
@@ -173,7 +183,7 @@ class DataKamino:
         if self.bodies is None:
             raise RuntimeError("DataKamino.bodies is not finalized.")
 
-        # Update rigid bodies data from the model state
+        # Copy rigid bodies data to the target state container
         wp.copy(state.q_i, self.bodies.q_i)
         wp.copy(state.u_i, self.bodies.u_i)
         wp.copy(state.w_i, self.bodies.w_i)
@@ -194,7 +204,7 @@ class DataKamino:
         if self.joints is None:
             raise RuntimeError("DataKamino.joints is not finalized.")
 
-        # Update joint data from the model state
+        # Copy joint data from the source state container
         wp.copy(self.joints.q_j, state.q_j)
         wp.copy(self.joints.q_j_p, state.q_j_p)
         wp.copy(self.joints.dq_j, state.dq_j)
@@ -216,7 +226,7 @@ class DataKamino:
         if self.joints is None:
             raise RuntimeError("DataKamino.joints is not finalized.")
 
-        # Update joint data from the model state
+        # Copy joint data to the target state container
         wp.copy(state.q_j, self.joints.q_j)
         wp.copy(state.q_j_p, self.joints.q_j_p)
         wp.copy(state.dq_j, self.joints.dq_j)
@@ -240,7 +250,7 @@ class DataKamino:
         if self.joints is None:
             raise RuntimeError("DataKamino.joints is not finalized.")
 
-        # Update joint data from the control inputs
+        # Copy joint control inputs from the source control container
         wp.copy(self.joints.tau_j, control.tau_j)
         wp.copy(self.joints.q_j_ref, control.q_j_ref)
         wp.copy(self.joints.dq_j_ref, control.dq_j_ref)
