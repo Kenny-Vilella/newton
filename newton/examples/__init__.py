@@ -1,18 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
+import ast
+import copy
+import gc
 import importlib
 import os
 import warnings
@@ -36,6 +27,20 @@ def get_asset_directory() -> str:
 
 def get_asset(filename: str) -> str:
     return os.path.join(get_asset_directory(), filename)
+
+
+def _enable_example_deprecation_warnings() -> None:
+    """Show Newton deprecations during example runs.
+
+    Skipped when ``PYTHONWARNINGS`` is already set so that
+    ``test_examples.py`` (or a user) can escalate warnings to errors
+    without this filter overriding their policy.
+    """
+    if "PYTHONWARNINGS" in os.environ or getattr(_enable_example_deprecation_warnings, "_installed", False):
+        return
+
+    warnings.filterwarnings("default", category=DeprecationWarning, module=r"newton(\.|$)")
+    _enable_example_deprecation_warnings._installed = True
 
 
 def download_external_git_folder(git_url: str, folder_path: str, force_refresh: bool = False):
@@ -77,11 +82,11 @@ def test_body_state(
 
     @wp.kernel
     def test_fn_kernel(
-        body_q: wp.array(dtype=wp.transform),
-        body_qd: wp.array(dtype=wp.spatial_vector),
-        indices: wp.array(dtype=int),
+        body_q: wp.array[wp.transform],
+        body_qd: wp.array[wp.spatial_vector],
+        indices: wp.array[int],
         # output
-        failures: wp.array(dtype=bool),
+        failures: wp.array[bool],
     ):
         world_id = wp.tid()
         index = indices[world_id]
@@ -149,11 +154,11 @@ def test_particle_state(
 
     @wp.kernel
     def test_fn_kernel(
-        particle_q: wp.array(dtype=wp.vec3),
-        particle_qd: wp.array(dtype=wp.vec3),
-        indices: wp.array(dtype=int),
+        particle_q: wp.array[wp.vec3],
+        particle_qd: wp.array[wp.vec3],
+        indices: wp.array[int],
         # output
-        failures: wp.array(dtype=bool),
+        failures: wp.array[bool],
     ):
         world_id = wp.tid()
         index = indices[world_id]
@@ -182,12 +187,16 @@ def test_particle_state(
 class _ExampleBrowser:
     """Manages the example browser UI and switching/reset logic for the run loop."""
 
-    def __init__(self, viewer):
+    def __init__(self, viewer, args=None):
         self.viewer = viewer
         self.switch_target: str | None = None
         self._reset_requested = False
         self.callback = None
         self._tree: dict[str, list[tuple[str, str]]] = {}
+        # Deep-copy so later mutations to the caller's namespace (or to
+        # nested mutable fields like ``args.warp_config``) do not change
+        # what Reset restores.
+        self._initial_args = copy.deepcopy(args) if args is not None else None
 
         if not hasattr(viewer, "register_ui_callback"):
             return
@@ -210,12 +219,11 @@ class _ExampleBrowser:
                             if clicked:
                                 self.switch_target = module_path
                         imgui.tree_pop()
-                imgui.separator()
-                if imgui.button("Reset"):
-                    self._reset_requested = True
 
         self.callback = _browser_ui
         viewer.register_ui_callback(_browser_ui, position="panel")
+        if hasattr(viewer, "set_reset_callback"):
+            viewer.set_reset_callback(lambda: setattr(self, "_reset_requested", True))
 
     def _register_ui(self, example):
         """Re-register the example's GUI callback (panel callbacks survive clear_model)."""
@@ -229,25 +237,50 @@ class _ExampleBrowser:
         try:
             mod = importlib.import_module(module_path)
             parser = getattr(mod.Example, "create_parser", create_parser)()
-            example = mod.Example(self.viewer, default_args(parser))
+            new_args = default_args(parser)
+            example = mod.Example(self.viewer, new_args)
         except Exception as e:
             warnings.warn(f"Failed to load example {module_path}: {e}", stacklevel=2)
             return None, example_class
+        # Track the args used to launch the current example so a subsequent
+        # Reset reuses the new example's args, not the originally launched
+        # example's args (different parsers expose different fields).
+        self._initial_args = copy.deepcopy(new_args)
         self._register_ui(example)
         return example, type(example)
 
     def reset(self, example_class):
-        """Reset the current example by re-creating it. Returns the new example or None."""
+        """Reset the current example by re-creating it. Returns the new example or None.
+
+        The caller must drop its reference to the old example before calling
+        this method.
+        """
         self._reset_requested = False
         self.viewer.clear_model()
         try:
-            parser = getattr(example_class, "create_parser", create_parser)()
-            new_example = example_class(self.viewer, default_args(parser))
+            if self._initial_args is not None:
+                # Re-create the example with the user's original CLI args so
+                # options like --world-count survive a reset; deep-copy so
+                # the new instance cannot mutate the snapshot.
+                args = copy.deepcopy(self._initial_args)
+            else:
+                parser = getattr(example_class, "create_parser", create_parser)()
+                args = default_args(parser)
+            new_example = example_class(self.viewer, args)
         except Exception as e:
             warnings.warn(f"Failed to reset example: {e}", stacklevel=2)
             return None
         self._register_ui(new_example)
         return new_example
+
+
+def _format_fps(fps: float) -> str:
+    """Format an FPS value with sufficient significant digits."""
+    if fps >= 10:
+        return f"{fps:.1f}"
+    if fps >= 1:
+        return f"{fps:.2f}"
+    return f"{fps:.3f}"
 
 
 def run(example, args):
@@ -258,7 +291,7 @@ def run(example, args):
     test_post_step = perform_test and hasattr(example, "test_post_step")
     test_final = perform_test and hasattr(example, "test_final")
 
-    browser = _ExampleBrowser(viewer) if not perform_test else None
+    browser = _ExampleBrowser(viewer, args) if not perform_test else None
 
     if hasattr(example, "gui") and hasattr(viewer, "register_ui_callback"):
         viewer.register_ui_callback(lambda ui, ex=example: ex.gui(ui), position="side")
@@ -269,6 +302,12 @@ def run(example, args):
             continue
 
         if browser is not None and browser._reset_requested:
+            # Drop our reference and force cycle collection so the old
+            # example's destructors finish before reset() enters the new
+            # CUDA graph capture; otherwise late texture/array __del__
+            # calls could fire mid-capture and CUDA rejects them.
+            example = None
+            gc.collect()
             example = browser.reset(example_class)
             continue
 
@@ -277,7 +316,7 @@ def run(example, args):
             viewer.end_frame()
             continue
 
-        if not viewer.is_paused():
+        if viewer.should_step():
             with wp.ScopedTimer("step", active=False):
                 example.step()
         if test_post_step:
@@ -293,6 +332,13 @@ def run(example, args):
             raise NotImplementedError("Example does not have a test_final or test_post_step method")
 
     viewer.close()
+
+    if hasattr(viewer, "benchmark_result"):
+        result = viewer.benchmark_result()
+        if result is not None:
+            print(
+                f"Benchmark: {_format_fps(result['fps'])} FPS ({result['frames']} frames in {result['elapsed']:.2f}s)"
+            )
 
     if perform_test:
         # generic tests for finiteness of Newton objects
@@ -388,6 +434,12 @@ def get_examples() -> dict[str, str]:
     return example_map
 
 
+def _print_examples(examples: dict[str, str]) -> None:
+    print("Available examples:")
+    for name in examples:
+        print(f"  {name}")
+
+
 def create_parser():
     """Create a base argument parser with common parameters for Newton examples.
 
@@ -436,6 +488,28 @@ def create_parser():
         default=False,
         help="Suppress Warp compilation messages.",
     )
+    parser.add_argument(
+        "--benchmark",
+        type=int,
+        default=False,
+        nargs="?",
+        const=None,
+        metavar="SECONDS",
+        help="Run in benchmark mode: measure FPS after a warmup period. If SECONDS is given, stop after that many seconds or --num-frames, whichever comes first.",
+    )
+    parser.add_argument(
+        "--warp-config",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Override a warp.config attribute (repeatable).",
+    )
+    parser.add_argument(
+        "--realtime",
+        action="store_true",
+        default=False,
+        help="Use the most aggressive process priority in benchmark mode.",
+    )
 
     return parser
 
@@ -461,6 +535,19 @@ def add_mujoco_contacts_arg(parser):
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Use MuJoCo's native contact solver instead of Newton contacts (default: use Newton contacts).",
+    )
+    return parser
+
+
+def add_kamino_contacts_arg(parser):
+    """Add ``--use-kamino-contacts`` argument to *parser*."""
+    import argparse  # noqa: PLC0415  — needed for BooleanOptionalAction
+
+    parser.add_argument(
+        "--use-kamino-contacts",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use Kamino's collision-detection wrapper instead of Newton contacts (default: use Newton contacts).",
     )
     return parser
 
@@ -499,6 +586,80 @@ def default_args(parser=None):
     return parser.parse_known_args([])[0]
 
 
+def _apply_warp_config(parser, args):
+    """Apply ``--warp-config`` overrides to :obj:`warp.config`.
+
+    Each entry in ``args.warp_config`` must have the form ``KEY=VALUE``.  The
+    key is validated to be an existing attribute of :obj:`warp.config`.  The
+    value is parsed with :func:`ast.literal_eval`; if that fails the raw
+    string is kept.
+
+    Args:
+        parser: The argument parser, used for error reporting.
+        args: Parsed argument namespace containing ``warp_config``.
+    """
+    if not args.warp_config:
+        return
+
+    for entry in args.warp_config:
+        if "=" not in entry:
+            parser.error(f"invalid --warp-config format '{entry}': expected KEY=VALUE")
+
+        key, value_str = entry.split("=", 1)
+
+        if not hasattr(wp.config, key):
+            parser.error(f"invalid --warp-config key '{key}': not a recognized warp.config setting")
+
+        try:
+            value = ast.literal_eval(value_str)
+        except (ValueError, SyntaxError):
+            value = value_str
+
+        setattr(wp.config, key, value)
+
+
+def _raise_benchmark_priority(realtime=False):
+    """Raise process/thread priority for stable benchmark measurements.
+
+    When *realtime* is True, try to use the most aggressive process priority; failure to raise priority is a fatal error.
+    """
+    import sys  # noqa: PLC0415
+
+    def _fail(msg):
+        if realtime:
+            raise SystemExit(f"Error: {msg}")
+        print(f"Warning: Benchmark running at default process priority. Results may vary. {msg}")
+
+    if sys.platform == "win32":
+        try:
+            import psutil  # noqa: PLC0415
+
+            priority = psutil.REALTIME_PRIORITY_CLASS if realtime else psutil.HIGH_PRIORITY_CLASS
+            psutil.Process().nice(priority)
+        except ModuleNotFoundError:
+            _fail("Install 'psutil' to automatically raise priority.")
+    elif sys.platform == "linux":
+        try:
+            os.nice(-20 if realtime else -15)
+        except PermissionError:
+            _fail("Run with elevated privileges to automatically raise priority.")
+    elif sys.platform == "darwin":
+        import ctypes  # noqa: PLC0415
+        import ctypes.util  # noqa: PLC0415
+
+        try:
+            libsystem = ctypes.CDLL(ctypes.util.find_library("System"))
+            # From <sys/qos.h>
+            QOS_CLASS_USER_INITIATED = 0x19
+            QOS_CLASS_USER_INTERACTIVE = 0x21
+            qos = QOS_CLASS_USER_INTERACTIVE if realtime else QOS_CLASS_USER_INITIATED
+            rc = libsystem.pthread_set_qos_class_self_np(qos, 0)
+            if rc != 0:
+                _fail(f"Failed to automatically raise priority (error {rc}).")
+        except OSError as e:
+            _fail(f"Failed to automatically raise priority: {e}")
+
+
 def init(parser=None):
     """Initialize Newton example components from parsed arguments.
 
@@ -516,6 +677,8 @@ def init(parser=None):
 
     import newton.viewer  # noqa: PLC0415
 
+    _enable_example_deprecation_warnings()
+
     # parse args
     if parser is None:
         parser = create_parser()
@@ -524,6 +687,9 @@ def init(parser=None):
         # When parser is provided, use parse_args() to properly handle --help
         args = parser.parse_args()
 
+    # Apply --warp-config overrides before any Warp API calls
+    _apply_warp_config(parser, args)
+
     # Suppress Warp compilation messages if requested
     if args.quiet:
         wp.config.quiet = True
@@ -531,6 +697,11 @@ def init(parser=None):
     # Set device if specified
     if args.device:
         wp.set_device(args.device)
+
+    # Benchmark mode forces null viewer and raises process/thread priority
+    if args.benchmark is not False:
+        args.viewer = "null"
+        _raise_benchmark_priority(realtime=args.realtime)
 
     # Create viewer based on type
     if args.viewer == "gl":
@@ -542,7 +713,11 @@ def init(parser=None):
     elif args.viewer == "rerun":
         viewer = newton.viewer.ViewerRerun(address=args.rerun_address)
     elif args.viewer == "null":
-        viewer = newton.viewer.ViewerNull(num_frames=args.num_frames)
+        viewer = newton.viewer.ViewerNull(
+            num_frames=args.num_frames,
+            benchmark=args.benchmark is not False,
+            benchmark_timeout=args.benchmark or None,
+        )
     elif args.viewer == "viser":
         viewer = newton.viewer.ViewerViser()
     else:
@@ -575,22 +750,31 @@ def main():
     import runpy  # noqa: PLC0415
     import sys  # noqa: PLC0415
 
+    _enable_example_deprecation_warnings()
+
     examples = get_examples()
 
-    if len(sys.argv) < 2:
-        print("Usage: python -m newton.examples <example_name>")
-        print("\nAvailable examples:")
-        for name in examples:
-            print(f"  {name}")
-        sys.exit(1)
+    if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help"):
+        print("Usage: python -m newton.examples <example_name> [options]")
+        print("       python -m newton.examples          # run default basic_pendulum")
+        print("       python -m newton.examples --list   # print available examples")
+        print()
+        print("Run 'python -m newton.examples <example_name> --help' to see the")
+        print("options supported by a given example.")
+        sys.exit(0)
 
-    example_name = sys.argv[1]
+    if len(sys.argv) >= 2 and sys.argv[1] == "--list":
+        _print_examples(examples)
+        sys.exit(0)
+
+    if len(sys.argv) < 2:
+        example_name = "basic_pendulum"
+    else:
+        example_name = sys.argv[1]
 
     if example_name not in examples:
-        print(f"Error: Unknown example '{example_name}'")
-        print("\nAvailable examples:")
-        for name in examples:
-            print(f"  {name}")
+        print(f"Error: Unknown example '{example_name}'\n")
+        _print_examples(examples)
         sys.exit(1)
 
     # Set up sys.argv for the target script

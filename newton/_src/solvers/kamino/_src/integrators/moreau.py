@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Provides an implementation of a Semi-Implicit Moreau-Jean
@@ -117,11 +105,11 @@ def moreau_jean_semi_implicit_with_logmap(
 @wp.kernel
 def _integrate_moreau_jean_first_inplace(
     # Inputs:
-    model_dt: wp.array(dtype=float32),
-    model_bodies_wid: wp.array(dtype=int32),
-    bodies_u: wp.array(dtype=vec6f),
+    model_dt: wp.array[float32],
+    model_bodies_wid: wp.array[int32],
+    bodies_u: wp.array[vec6f],
     # Outputs:
-    bodies_q: wp.array(dtype=transformf),
+    bodies_q: wp.array[transformf],
 ):
     # Retrieve the thread index
     tid = wp.tid()
@@ -152,16 +140,16 @@ def _integrate_moreau_jean_first_inplace(
 def _integrate_moreau_jean_second_inplace(
     # Inputs:
     alpha: float,
-    model_dt: wp.array(dtype=float32),
-    model_gravity: wp.array(dtype=vec4f),
-    model_bodies_wid: wp.array(dtype=int32),
-    model_bodies_inv_m: wp.array(dtype=float32),
-    model_bodies_I: wp.array(dtype=mat33f),
-    model_bodies_inv_I: wp.array(dtype=mat33f),
-    state_bodies_w: wp.array(dtype=vec6f),
+    model_dt: wp.array[float32],
+    model_gravity: wp.array[vec4f],
+    model_bodies_wid: wp.array[int32],
+    model_bodies_inv_m: wp.array[float32],
+    model_bodies_I: wp.array[mat33f],
+    model_bodies_inv_I: wp.array[mat33f],
+    state_bodies_w: wp.array[vec6f],
     # Outputs:
-    state_bodies_q: wp.array(dtype=transformf),
-    state_bodies_u: wp.array(dtype=vec6f),
+    state_bodies_q: wp.array[transformf],
+    state_bodies_u: wp.array[vec6f],
 ):
     # Retrieve the thread index
     tid = wp.tid()
@@ -361,6 +349,7 @@ class IntegratorMoreauJean(IntegratorBase):
                 # Outputs:
                 data.bodies.q_i,
             ],
+            device=model.device,
         )
 
     def _integrate2(self, model: ModelKamino, data: DataKamino):
@@ -393,4 +382,5 @@ class IntegratorMoreauJean(IntegratorBase):
                 data.bodies.q_i,
                 data.bodies.u_i,
             ],
+            device=model.device,
         )

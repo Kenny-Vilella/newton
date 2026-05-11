@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import argparse
 import os
@@ -44,19 +32,20 @@ class Example:
         self,
         device: wp.DeviceLike = None,
         max_steps: int = 1000,
+        unary_joints: bool = False,
         use_cuda_graph: bool = False,
         gravity: bool = True,
-        ground: bool = False,
         logging: bool = False,
         headless: bool = False,
         record_video: bool = False,
         async_save: bool = False,
     ):
         # Initialize target frames per second and corresponding time-steps
-        self.fps = 60
-        self.sim_dt = 0.001
+        self.fps = 50
         self.frame_dt = 1.0 / self.fps
-        self.sim_substeps = max(1, round(self.frame_dt / self.sim_dt))
+        self.sim_substeps = max(1, round(self.frame_dt / 0.001))
+        self.sim_dt = self.frame_dt / self.sim_substeps
+        msg.info(f"Using sim_dt = {self.sim_dt} ({self.sim_substeps} substeps per frame)")
         self.max_steps = max_steps
 
         # Cache the device and other internal flags
@@ -65,7 +54,9 @@ class Example:
 
         # Construct model builder
         msg.notif("Constructing builder using model generator ...")
-        self.builder: ModelBuilderKamino = build_all_joints_test_model(ground=ground)
+        self.builder: ModelBuilderKamino = build_all_joints_test_model(
+            unary_joints=unary_joints, binary_joints=not unary_joints
+        )
 
         # Set gravity
         for w in range(self.builder.num_worlds):
@@ -109,6 +100,7 @@ class Example:
                 video_folder=video_folder,
                 async_save=async_save,
             )
+            self.viewer.world_spacing = wp.vec3f(-0.2, 0.0, 0.0)
 
         # Declare and initialize the optional computation graphs
         # NOTE: These are used for most efficient GPU runtime
@@ -116,14 +108,14 @@ class Example:
         self.step_graph = None
         self.simulate_graph = None
 
-        # Capture CUDA graph if requested and available
-        self.capture()
-
         # Warm-start the simulator before rendering
         # NOTE: This compiles and loads the warp kernels prior to execution
         msg.notif("Warming up simulator...")
         self.step_once()
         self.reset()
+
+        # Capture CUDA graph if requested and available
+        self.capture()
 
     def capture(self):
         """Capture CUDA graph if requested and available."""
@@ -218,9 +210,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gravity", action=argparse.BooleanOptionalAction, default=True, help="Enables gravity in the simulation"
     )
-    parser.add_argument(
-        "--ground", action=argparse.BooleanOptionalAction, default=False, help="Adds a ground plane to the simulation"
-    )
     parser.add_argument("--cuda-graph", action=argparse.BooleanOptionalAction, default=True, help="Use CUDA graphs")
     parser.add_argument("--clear-cache", action=argparse.BooleanOptionalAction, default=False, help="Clear warp cache")
     parser.add_argument(
@@ -236,6 +225,12 @@ if __name__ == "__main__":
         choices=["sync", "async"],
         default=None,
         help="Enable frame recording: 'sync' for synchronous, 'async' for asynchronous (non-blocking)",
+    )
+    parser.add_argument(
+        "--unary-joints",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use unary (instead of binary) joints",
     )
     args = parser.parse_args()
 
@@ -270,8 +265,8 @@ if __name__ == "__main__":
         device=device,
         use_cuda_graph=use_cuda_graph,
         max_steps=args.num_steps,
+        unary_joints=args.unary_joints,
         gravity=args.gravity,
-        ground=args.ground,
         headless=args.headless,
         logging=args.logging,
         record_video=args.record is not None and not args.headless,
@@ -288,7 +283,7 @@ if __name__ == "__main__":
         msg.notif("Running in Viewer mode...")
         # Set initial camera position for better view of the system
         if hasattr(example.viewer, "set_camera"):
-            camera_pos = wp.vec3(-17.0, -25.0, 0.0)
+            camera_pos = wp.vec3(-0.75, -1.2, 0.0)
             pitch = 0.0
             yaw = 90.0
             example.viewer.set_camera(camera_pos, pitch, yaw)

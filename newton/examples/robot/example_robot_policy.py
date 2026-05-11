@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 ###########################################################################
 # Example Robot control via keyboard
@@ -30,6 +18,7 @@
 # to run the example with a PhysX-trained policy run with --physx
 ###########################################################################
 
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,7 +71,6 @@ ROBOT_CONFIGS = {
 }
 
 
-@torch.jit.script
 def quat_rotate_inverse(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """Rotate a vector by the inverse of a quaternion.
 
@@ -103,6 +91,15 @@ def quat_rotate_inverse(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     else:
         c = q_vec * torch.einsum("...i,...i->...", q_vec, v).unsqueeze(-1) * 2.0
     return a - b + c
+
+
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`torch\.jit\.script` is deprecated\. Please switch to `torch\.compile` or `torch\.export`\.",
+        category=DeprecationWarning,
+    )
+    quat_rotate_inverse = torch.jit.script(quat_rotate_inverse)
 
 
 def compute_obs(
@@ -161,7 +158,13 @@ def load_policy_and_setup_tensors(example: Any, policy_path: str, num_dofs: int,
     """
     device = example.torch_device
     print("[INFO] Loading policy from:", policy_path)
-    example.policy = torch.jit.load(policy_path, map_location=device)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"`torch\.jit\.load` is deprecated\. Please switch to `torch\.export`\.",
+            category=DeprecationWarning,
+        )
+        example.policy = torch.jit.load(policy_path, map_location=device)
 
     # Handle potential None state
     joint_q = example.state_0.joint_q if example.state_0.joint_q is not None else []
@@ -189,15 +192,40 @@ def find_physx_mjwarp_mapping(mjwarp_joint_names, physx_joint_names):
 
 
 class Example:
-    def __init__(
-        self,
-        viewer,
-        robot_config: RobotConfig,
-        config,
-        asset_directory: str,
-        mjc_to_physx: list[int],
-        physx_to_mjc: list[int],
-    ):
+    def __init__(self, viewer, args):
+        # Resolve robot configuration, asset paths, and joint mapping from args.
+        # Done in __init__ (rather than at module level) so the example can be
+        # rebuilt by _ExampleBrowser.reset() with the same (viewer, args) call
+        # convention as every other example.
+        if args.robot not in ROBOT_CONFIGS:
+            raise ValueError(f"Unknown robot: {args.robot}. Available: {list(ROBOT_CONFIGS.keys())}")
+        robot_config = ROBOT_CONFIGS[args.robot]
+        print(f"[INFO] Selected robot: {args.robot}")
+
+        asset_directory = str(newton.utils.download_asset(robot_config.asset_dir))
+        print(f"[INFO] Asset directory: {asset_directory}")
+
+        yaml_file_path = f"{asset_directory}/{robot_config.yaml_path}"
+        with open(yaml_file_path, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        print(f"[INFO] Loaded config with {config['num_dofs']} DOFs")
+
+        mjc_to_physx = list(range(config["num_dofs"]))
+        physx_to_mjc = list(range(config["num_dofs"]))
+
+        if args.physx:
+            if "physx" not in robot_config.policy_path or "physx_joint_names" not in config:
+                physx_robots = [name for name, cfg in ROBOT_CONFIGS.items() if "physx" in cfg.policy_path]
+                raise ValueError(
+                    f"PhysX policy not available for robot '{args.robot}'. Robots with PhysX support: {physx_robots}"
+                )
+            policy_path = f"{asset_directory}/{robot_config.policy_path['physx']}"
+            mjc_to_physx, physx_to_mjc = find_physx_mjwarp_mapping(
+                config["mjw_joint_names"], config["physx_joint_names"]
+            )
+        else:
+            policy_path = f"{asset_directory}/{robot_config.policy_path['mjw']}"
+
         # Setup simulation parameters first
         fps = 200
         self.frame_dt = 1.0e0 / fps
@@ -302,6 +330,9 @@ class Example:
         self.act = None
         self.rearranged_act = None
 
+        # Load policy weights and prepare tensors used by step()
+        load_policy_and_setup_tensors(self, policy_path, config["num_dofs"], slice(7, None))
+
         # Call capture at the end
         self.capture()
 
@@ -405,64 +436,25 @@ class Example:
             lambda q, qd: q[2] > 0.0,
         )
 
+    @staticmethod
+    def create_parser():
+        parser = newton.examples.create_parser()
+        parser.add_argument(
+            "--robot",
+            type=str,
+            default="g1_29dof",
+            choices=list(ROBOT_CONFIGS.keys()),
+            help="Robot name to load",
+        )
+        parser.add_argument(
+            "--physx",
+            action="store_true",
+            help="Run physX policy instead of MJWarp.",
+        )
+        return parser
+
 
 if __name__ == "__main__":
-    # Create parser that inherits common arguments and adds
-    # example-specific ones
-    parser = newton.examples.create_parser()
-    parser.add_argument(
-        "--robot", type=str, default="g1_29dof", choices=list(ROBOT_CONFIGS.keys()), help="Robot name to load"
-    )
-    parser.add_argument("--physx", action="store_true", help="Run physX policy instead of MJWarp.")
-
-    # Parse arguments and initialize viewer
+    parser = Example.create_parser()
     viewer, args = newton.examples.init(parser)
-
-    # Get robot configuration
-    if args.robot not in ROBOT_CONFIGS:
-        print(f"[ERROR] Unknown robot: {args.robot}")
-        print(f"[INFO] Available robots: {list(ROBOT_CONFIGS.keys())}")
-        exit(1)
-
-    robot_config = ROBOT_CONFIGS[args.robot]
-    print(f"[INFO] Selected robot: {args.robot}")
-
-    # Download assets from newton-assets repository
-    asset_directory = str(newton.utils.download_asset(robot_config.asset_dir))
-    print(f"[INFO] Asset directory: {asset_directory}")
-
-    # Load robot configuration from YAML file in the downloaded assets
-    yaml_file_path = f"{asset_directory}/{robot_config.yaml_path}"
-    try:
-        with open(yaml_file_path, encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-    except FileNotFoundError:
-        print(f"[ERROR] Robot config file not found: {yaml_file_path}")
-        exit(1)
-    except yaml.YAMLError as e:
-        print(f"[ERROR] Error parsing YAML file: {e}")
-        exit(1)
-
-    print(f"[INFO] Loaded config with {config['num_dofs']} DOFs")
-
-    mjc_to_physx = list(range(config["num_dofs"]))
-    physx_to_mjc = list(range(config["num_dofs"]))
-
-    if args.physx:
-        if "physx" not in robot_config.policy_path or "physx_joint_names" not in config:
-            physx_robots = [name for name, cfg in ROBOT_CONFIGS.items() if "physx" in cfg.policy_path]
-            print(f"[ERROR] PhysX policy not available for robot '{args.robot}'.")
-            print(f"[INFO] Robots with PhysX support: {physx_robots}")
-            exit(1)
-        policy_path = f"{asset_directory}/{robot_config.policy_path['physx']}"
-        mjc_to_physx, physx_to_mjc = find_physx_mjwarp_mapping(config["mjw_joint_names"], config["physx_joint_names"])
-    else:
-        policy_path = f"{asset_directory}/{robot_config.policy_path['mjw']}"
-
-    example = Example(viewer, robot_config, config, asset_directory, mjc_to_physx, physx_to_mjc)
-
-    # Use utility function to load policy and setup tensors
-    load_policy_and_setup_tensors(example, policy_path, config["num_dofs"], slice(7, None))
-
-    # Run using standard example loop
-    newton.examples.run(example, args)
+    newton.examples.run(Example(viewer, args), args)

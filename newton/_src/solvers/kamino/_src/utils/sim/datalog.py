@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Utilities for simulation data logging and plotting."""
 
@@ -112,7 +100,7 @@ class SimulationLogger:
             )
         else:
             dof_offset = 0
-            for joint in self._builder.joints:
+            for joint in self._builder.all_joints:
                 if joint.is_actuated:
                     for dof in range(joint.num_dofs):
                         self._actuated_dofs.append(dof_offset + dof)
@@ -302,7 +290,16 @@ class SimulationLogger:
         self.plt.rcParams["axes.axisbelow"] = True
         self.plt.grid(True, which="major", linestyle="--", linewidth=0.5)
         self.plt.grid(True, which="minor", linestyle=":", linewidth=0.25)
-        self.plt.hist(self.log_padmm_iters[: self._frames], bins=50)
+        num_iters_data = self.log_padmm_iters[: self._frames]
+        self.plt.hist(
+            num_iters_data,
+            bins=max(1, np.max(num_iters_data) - np.min(num_iters_data) + 1),  # Ensure there is one bar per integer
+            range=(
+                np.min(num_iters_data) - 0.5,
+                np.max(num_iters_data) + 0.5,
+            ),  # Center histogram bar at integer values
+        )
+        self.plt.gca().xaxis.get_major_locator().set_params(integer=True)
         self.plt.yscale("log")  # Make Y-axis logarithmic
         self.plt.title("Histogram of PADMM Solver Iterations")
         self.plt.xlabel("Iterations")

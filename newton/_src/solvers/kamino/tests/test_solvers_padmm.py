@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Unit tests for the Proximal-ADMM Solver."""
 
@@ -65,7 +53,7 @@ class TestSetup:
         self.builder.gravity[0].enabled = gravity
         if perturb:
             u_0 = screw(vec3f(+10.0, 0.0, 0.0), vec3f(0.0, 0.0, 0.0))
-            for body in self.builder.bodies:
+            for body in self.builder.all_bodies:
                 body.u_i_0 = u_0
 
         # Create the model and containers from the builder
@@ -81,8 +69,8 @@ class TestSetup:
             data=self.data,
             limits=self.limits,
             contacts=self.contacts,
+            jacobians=self.jacobians,
             solver=ConjugateResidualSolver if sparse else LLTBlockedSolver,
-            device=device,
             sparse=sparse,
         )
 
@@ -668,6 +656,32 @@ class TestPADMMSolver(unittest.TestCase):
             msg.notif("Generating solver info plots...")
             path = self.output_path / "test_07_padmm_solve_with_acceleration_and_container_warmstart.pdf"
             save_solver_info(solver=solver, path=str(path))
+
+    def test_10_padmm_solve_single_contact(self):
+        """
+        Tests the Proximal-ADMM (PADMM) solver with default config on the reference problem (no
+        constraints and limits) with a single contact.
+        """
+        # Create the test problem
+        test = TestSetup(builder_fn=basics.build_box_on_plane, max_world_contacts=1, device=self.default_device)
+
+        # Create the PADMM solver
+        solver = PADMMSolver(model=test.model)
+
+        # Solve the test problem
+        test.build()
+        solver.reset()
+        solver.coldstart()
+        solver.solve(problem=test.problem)
+
+        # Extract solver info
+        if self.savefig:
+            msg.notif("Generating solver info plots...")
+            path = self.output_path / "test_10_padmm_solve.pdf"
+            save_solver_info(solver=solver, path=str(path))
+
+        # Check solution
+        check_padmm_solution(self, test.model, test.problem, solver, verbose=self.verbose)
 
 
 ###

@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 ###########################################################################
 # Example Robot ANYmal C Walk
@@ -23,19 +11,20 @@
 #
 ###########################################################################
 
+import warnings
+
 import torch
 import warp as wp
 
 import newton
 import newton.examples
 import newton.utils
-from newton import GeoType, State
+from newton import State
 
 lab_to_mujoco = [0, 6, 3, 9, 1, 7, 4, 10, 2, 8, 5, 11]
 mujoco_to_lab = [0, 4, 8, 2, 6, 10, 1, 5, 9, 3, 7, 11]
 
 
-@torch.jit.script
 def quat_rotate_inverse(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     """Rotate a vector by the inverse of a quaternion along the last dimension of q and v.    Args:
     q: The quaternion in (x, y, z, w). Shape is (..., 4).
@@ -52,6 +41,15 @@ def quat_rotate_inverse(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
     else:
         c = q_vec * torch.einsum("...i,...i->...", q_vec, v).unsqueeze(-1) * 2.0
     return a - b + c
+
+
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message=r"`torch\.jit\.script` is deprecated\. Please switch to `torch\.compile` or `torch\.export`\.",
+        category=DeprecationWarning,
+    )
+    quat_rotate_inverse = torch.jit.script(quat_rotate_inverse)
 
 
 def compute_obs(actions, state: State, joint_pos_initial, device, indices, gravity_vec, command):
@@ -76,7 +74,6 @@ class Example:
         self.viewer = viewer
         self.device = wp.get_device()
         self.torch_device = wp.device_to_torch(self.device)
-        self.is_test = args is not None and args.test
 
         builder = newton.ModelBuilder()
         newton.solvers.SolverMuJoCo.register_custom_attributes(builder)
@@ -101,35 +98,6 @@ class Example:
             ignore_inertial_definitions=False,
         )
 
-        # Enlarge foot collision spheres to improve walking stability on uneven terrain.
-        # The URDF defines small spheres on the shank links; doubling their radius
-        # prevents the robot from stumbling on terrain features like waves and stairs.
-        for i in range(len(builder.shape_type)):
-            if builder.shape_type[i] == GeoType.SPHERE:
-                r = builder.shape_scale[i][0]
-                builder.shape_scale[i] = (r * 2.0, 0.0, 0.0)
-
-        # Generate procedural terrain for visual demonstration (but not during unit tests)
-        if not self.is_test:
-            terrain_mesh = newton.Mesh.create_terrain(
-                grid_size=(8, 3),  # 3x8 grid for forward walking
-                block_size=(3.0, 3.0),
-                terrain_types=["random_grid", "flat", "wave", "gap", "pyramid_stairs"],
-                terrain_params={
-                    "pyramid_stairs": {"step_width": 0.3, "step_height": 0.02, "platform_width": 0.6},
-                    "random_grid": {"grid_width": 0.3, "grid_height_range": (0, 0.02)},
-                    "wave": {"wave_amplitude": 0.1, "wave_frequency": 2.0},  # amplitude reduced from 0.15
-                },
-                seed=42,
-                compute_inertia=False,
-            )
-            terrain_offset = wp.transform(p=wp.vec3(-5, -2.0, 0.01), q=wp.quat_identity())
-            builder.add_shape_mesh(
-                body=-1,
-                mesh=terrain_mesh,
-                xform=terrain_offset,
-                cfg=newton.ModelBuilder.ShapeConfig(has_shape_collision=False),
-            )
         builder.add_ground_plane()
 
         self.sim_time = 0.0
@@ -212,7 +180,13 @@ class Example:
         policy_asset_path = newton.utils.download_asset("anybotics_anymal_c")
         policy_path = str(policy_asset_path / "rl_policies" / "anymal_walking_policy_physx.pt")
 
-        self.policy = torch.jit.load(policy_path, map_location=self.torch_device)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"`torch\.jit\.load` is deprecated\. Please switch to `torch\.export`\.",
+                category=DeprecationWarning,
+            )
+            self.policy = torch.jit.load(policy_path, map_location=self.torch_device)
         self.joint_pos_initial = torch.tensor(
             self.state_0.joint_q[7:], device=self.torch_device, dtype=torch.float32
         ).unsqueeze(0)
@@ -358,6 +332,4 @@ if __name__ == "__main__":
     parser = Example.create_parser()
     viewer, args = newton.examples.init(parser)
 
-    example = Example(viewer, args)
-
-    newton.examples.run(example, args)
+    newton.examples.run(Example(viewer, args), args)

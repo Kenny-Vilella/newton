@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Unit tests for the high-level Simulator class utility of Kamino"""
 
@@ -36,9 +24,9 @@ from newton._src.solvers.kamino.tests import setup_tests, test_context
 
 @wp.kernel
 def _test_control_callback(
-    model_dt: wp.array(dtype=float32),
-    data_time: wp.array(dtype=float32),
-    control_tau_j: wp.array(dtype=float32),
+    model_dt: wp.array[float32],
+    data_time: wp.array[float32],
+    control_tau_j: wp.array[float32],
 ):
     """
     An example control callback kernel.
@@ -81,6 +69,7 @@ def test_control_callback(sim: Simulator):
             sim.solver.data.time.time,
             sim.control.tau_j,
         ],
+        device=sim._device,
     )
 
 
@@ -119,7 +108,7 @@ class TestCartpoleSimulator(unittest.TestCase):
 
         # Create a single-instance system
         single_builder = build_cartpole(ground=False)
-        for i, body in enumerate(single_builder.bodies):
+        for i, body in enumerate(single_builder.all_bodies):
             msg.info(f"[single]: [builder]: body {i}: q_i: {body.q_i_0}")
             msg.info(f"[single]: [builder]: body {i}: u_i: {body.u_i_0}")
 
@@ -128,7 +117,7 @@ class TestCartpoleSimulator(unittest.TestCase):
         single_sim.set_control_callback(test_control_callback)
         self.assertEqual(single_sim.model.size.sum_of_num_bodies, 2)
         self.assertEqual(single_sim.model.size.sum_of_num_joints, 2)
-        for i, body in enumerate(single_builder.bodies):
+        for i, body in enumerate(single_builder.all_bodies):
             np.testing.assert_allclose(single_sim.model.bodies.q_i_0.numpy()[i], body.q_i_0)
             np.testing.assert_allclose(single_sim.model.bodies.u_i_0.numpy()[i], body.u_i_0)
             np.testing.assert_allclose(single_sim.state.q_i.numpy()[i], body.q_i_0)
@@ -196,7 +185,7 @@ class TestCartpoleSimulator(unittest.TestCase):
 
         # Create a multi-instance system by replicating the single-instance builder
         multi_builder = make_homogeneous_builder(num_worlds=num_worlds, build_fn=build_cartpole, ground=False)
-        for i, body in enumerate(multi_builder.bodies):
+        for i, body in enumerate(multi_builder.all_bodies):
             msg.info(f"[multi]: [builder]: body {i}: bid: {body.bid}")
             msg.info(f"[multi]: [builder]: body {i}: q_i: {body.q_i_0}")
             msg.info(f"[multi]: [builder]: body {i}: u_i: {body.u_i_0}")
@@ -206,7 +195,7 @@ class TestCartpoleSimulator(unittest.TestCase):
         multi_sim.set_control_callback(test_control_callback)
         self.assertEqual(multi_sim.model.size.sum_of_num_bodies, single_sim.model.size.sum_of_num_bodies * num_worlds)
         self.assertEqual(multi_sim.model.size.sum_of_num_joints, single_sim.model.size.sum_of_num_joints * num_worlds)
-        for i, body in enumerate(multi_builder.bodies):
+        for i, body in enumerate(multi_builder.all_bodies):
             np.testing.assert_allclose(multi_sim.model.bodies.q_i_0.numpy()[i], body.q_i_0)
             np.testing.assert_allclose(multi_sim.model.bodies.u_i_0.numpy()[i], body.u_i_0)
             np.testing.assert_allclose(multi_sim.state_previous.q_i.numpy()[i], body.q_i_0)
@@ -258,7 +247,7 @@ class TestCartpoleSimulator(unittest.TestCase):
         np.testing.assert_allclose(multi_sim.state.q_j.numpy(), multi_final_q_j)
         np.testing.assert_allclose(multi_sim.state.dq_j.numpy(), multi_final_dq_j)
 
-    def test_step_02_multiple_cartpoles_reset_all_from_sampled_states(self):
+    def test_02_step_multiple_cartpoles_reset_all_from_sampled_states(self):
         """
         Test stepping multiple cartpole simulators once but initialized from
         states collected from a single-instance simulator over multiple steps.
@@ -266,7 +255,7 @@ class TestCartpoleSimulator(unittest.TestCase):
 
         # Create a single-instance system
         single_builder = build_cartpole(ground=False)
-        for i, body in enumerate(single_builder.bodies):
+        for i, body in enumerate(single_builder.all_bodies):
             msg.info(f"[single]: [builder]: body {i}: q_i: {body.q_i_0}")
             msg.info(f"[single]: [builder]: body {i}: u_i: {body.u_i_0}")
 
@@ -275,7 +264,7 @@ class TestCartpoleSimulator(unittest.TestCase):
         single_sim.set_control_callback(test_control_callback)
         self.assertEqual(single_sim.model.size.sum_of_num_bodies, 2)
         self.assertEqual(single_sim.model.size.sum_of_num_joints, 2)
-        for i, b in enumerate(single_builder.bodies):
+        for i, b in enumerate(single_builder.all_bodies):
             np.testing.assert_allclose(single_sim.model.bodies.q_i_0.numpy()[i], b.q_i_0)
             np.testing.assert_allclose(single_sim.model.bodies.u_i_0.numpy()[i], b.u_i_0)
             np.testing.assert_allclose(single_sim.state.q_i.numpy()[i], b.q_i_0)
@@ -361,7 +350,7 @@ class TestCartpoleSimulator(unittest.TestCase):
 
         # Create a multi-instance system by replicating the single-instance builder
         multi_builder = make_homogeneous_builder(num_worlds=num_sample_steps, build_fn=build_cartpole, ground=False)
-        for i, body in enumerate(multi_builder.bodies):
+        for i, body in enumerate(multi_builder.all_bodies):
             msg.info(f"[multi]: [builder]: body {i}: bid: {body.bid}")
             msg.info(f"[multi]: [builder]: body {i}: q_i: {body.q_i_0}")
             msg.info(f"[multi]: [builder]: body {i}: u_i: {body.u_i_0}")
@@ -370,7 +359,7 @@ class TestCartpoleSimulator(unittest.TestCase):
         multi_sim = Simulator(builder=multi_builder, device=self.default_device)
         self.assertEqual(multi_sim.model.size.sum_of_num_bodies, 2 * num_sample_steps)
         self.assertEqual(multi_sim.model.size.sum_of_num_joints, 2 * num_sample_steps)
-        for i, b in enumerate(multi_builder.bodies):
+        for i, b in enumerate(multi_builder.all_bodies):
             np.testing.assert_allclose(multi_sim.model.bodies.q_i_0.numpy()[i], b.q_i_0)
             np.testing.assert_allclose(multi_sim.model.bodies.u_i_0.numpy()[i], b.u_i_0)
             np.testing.assert_allclose(multi_sim.state_previous.q_i.numpy()[i], b.q_i_0)

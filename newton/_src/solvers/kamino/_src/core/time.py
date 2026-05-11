@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Defines containers for time-keeping across heterogeneous worlds simulated in parallel.
@@ -156,10 +144,10 @@ class TimeData:
 @wp.kernel
 def _advance_time(
     # Inputs
-    dt: wp.array(dtype=float32),
+    dt: wp.array[float32],
     # Outputs
-    steps: wp.array(dtype=int32),  # TODO: Make this uint64
-    time: wp.array(dtype=float32),
+    steps: wp.array[int32],  # TODO: Make this uint64
+    time: wp.array[float32],
 ):
     """
     Advances the time-keeping state of each world by one time-step.
@@ -222,4 +210,5 @@ def advance_time(model: TimeModel, data: TimeData):
             data.steps,
             data.time,
         ],
+        device=data.time.device,
     )

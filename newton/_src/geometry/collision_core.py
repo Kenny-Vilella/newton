@@ -1,20 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import warp as wp
@@ -23,7 +12,14 @@ from ..core.types import vec5
 from .broad_phase_common import binary_search
 from .collision_convex import create_solve_convex_multi_contact, create_solve_convex_single_contact
 from .contact_data import ContactData
-from .support_function import GenericShapeData, GeoTypeEx, SupportMapDataProvider, pack_mesh_ptr, support_map
+from .support_function import (
+    GenericShapeData,
+    GeoTypeEx,
+    SupportMapDataProvider,
+    pack_mesh_ptr,
+    support_map,
+    unpack_mesh_ptr,
+)
 from .types import GeoType
 
 # Configuration flag for multi-contact generation
@@ -46,6 +42,7 @@ def is_discrete_shape(shape_type: int) -> bool:
         shape_type == GeoType.BOX
         or shape_type == GeoType.CONVEX_MESH
         or shape_type == GeoTypeEx.TRIANGLE
+        or shape_type == GeoTypeEx.TRIANGLE_PRISM
         or shape_type == GeoType.PLANE
     )
 
@@ -145,6 +142,34 @@ def no_post_process_contact(
 
 
 @wp.func
+def post_process_minkowski_only(
+    contact_data: ContactData,
+    shape_a: GenericShapeData,
+    pos_a_adjusted: wp.vec3,
+    rot_a: wp.quat,
+    shape_b: GenericShapeData,
+    pos_b_adjusted: wp.vec3,
+    rot_b: wp.quat,
+) -> ContactData:
+    """Lean post-processor: Minkowski sphere/capsule adjustment only, no axial rolling."""
+    type_a = shape_a.shape_type
+    type_b = shape_b.shape_type
+    normal = contact_data.contact_normal_a_to_b
+    radius_eff_a = contact_data.radius_eff_a
+    radius_eff_b = contact_data.radius_eff_b
+
+    if type_a == GeoType.SPHERE or type_a == GeoType.CAPSULE:
+        contact_data.contact_point_center = contact_data.contact_point_center + normal * (radius_eff_a * 0.5)
+        contact_data.contact_distance = contact_data.contact_distance - radius_eff_a
+
+    if type_b == GeoType.SPHERE or type_b == GeoType.CAPSULE:
+        contact_data.contact_point_center = contact_data.contact_point_center - normal * (radius_eff_b * 0.5)
+        contact_data.contact_distance = contact_data.contact_distance - radius_eff_b
+
+    return contact_data
+
+
+@wp.func
 def post_process_axial_on_discrete_contact(
     contact_data: ContactData,
     shape_a: GenericShapeData,
@@ -230,7 +255,7 @@ def post_process_axial_on_discrete_contact(
                 is_rolling = True
         else:
             # For cylinder: axis should be perpendicular to normal (dot product ≈ 0)
-            perpendicular_threshold = wp.static(wp.sin(2.0 * wp.pi / 180.0))
+            perpendicular_threshold = wp.static(math.sin(2.0 * math.pi / 180.0))
             if axis_normal_dot <= perpendicular_threshold:
                 is_rolling = True
 
@@ -251,17 +276,23 @@ def post_process_axial_on_discrete_contact(
 
 
 def create_compute_gjk_mpr_contacts(
-    writer_func: Any, post_process_contact: Any = post_process_axial_on_discrete_contact
+    writer_func: Any,
+    post_process_contact: Any = post_process_axial_on_discrete_contact,
+    support_func: Any = None,
 ):
     """
     Factory function to create a compute_gjk_mpr_contacts function with a specific writer function.
 
     Args:
         writer_func: Function to write contact data (signature: (ContactData, writer_data) -> None)
+        post_process_contact: Function to post-process contact data
+        support_func: Support mapping function (defaults to support_map)
 
     Returns:
         A compute_gjk_mpr_contacts function with the writer function baked in
     """
+    if support_func is None:
+        support_func = support_map
 
     @wp.func
     def compute_gjk_mpr_contacts(
@@ -277,6 +308,7 @@ def create_compute_gjk_mpr_contacts(
         margin_a: float,
         margin_b: float,
         writer_data: Any,
+        sort_sub_key: int = 0,
     ):
         """
         Compute contacts between two shapes using GJK/MPR algorithm and write them.
@@ -294,6 +326,7 @@ def create_compute_gjk_mpr_contacts(
             margin_a: Per-shape margin offset for shape A (signed distance padding)
             margin_b: Per-shape margin offset for shape B (signed distance padding)
             writer_data: Data structure for contact writer
+            sort_sub_key: Sub-key for deterministic contact sorting (e.g. triangle/edge index)
         """
         data_provider = SupportMapDataProvider()
 
@@ -324,18 +357,18 @@ def create_compute_gjk_mpr_contacts(
         contact_template.shape_a = shape_a
         contact_template.shape_b = shape_b
         contact_template.gap_sum = rigid_gap
+        contact_template.sort_sub_key = sort_sub_key
 
         if wp.static(ENABLE_MULTI_CONTACT):
-            wp.static(create_solve_convex_multi_contact(support_map, writer_func, post_process_contact))(
+            wp.static(create_solve_convex_multi_contact(support_func, writer_func, post_process_contact))(
                 shape_a_data,
                 shape_b_data,
                 rot_a,
                 rot_b,
                 pos_a_adjusted,
                 pos_b_adjusted,
-                0.0,  # sum_of_contact_offsets - gap
                 data_provider,
-                rigid_gap + radius_eff_a + radius_eff_b,
+                rigid_gap + radius_eff_a + radius_eff_b + margin_a + margin_b,
                 type_a == GeoType.SPHERE
                 or type_b == GeoType.SPHERE
                 or type_a == GeoType.ELLIPSOID
@@ -344,16 +377,15 @@ def create_compute_gjk_mpr_contacts(
                 contact_template,
             )
         else:
-            wp.static(create_solve_convex_single_contact(support_map, writer_func, post_process_contact))(
+            wp.static(create_solve_convex_single_contact(support_func, writer_func, post_process_contact))(
                 shape_a_data,
                 shape_b_data,
                 rot_a,
                 rot_b,
                 pos_a_adjusted,
                 pos_b_adjusted,
-                0.0,  # sum_of_contact_offsets - gap
                 data_provider,
-                rigid_gap + radius_eff_a + radius_eff_b,
+                rigid_gap + radius_eff_a + radius_eff_b + margin_a + margin_b,
                 writer_data,
                 contact_template,
             )
@@ -393,29 +425,64 @@ def compute_tight_aabb_from_support(
     # Compute AABB extents by evaluating support function in local space
     # Dot products are done in local space to avoid expensive rotations
 
-    # Max X: support along +local_x, dot in local space
-    support_point = support_map(shape_data, local_x, data_provider)
-    max_x = wp.dot(local_x, support_point)
+    min_x = float(0.0)
+    max_x = float(0.0)
+    min_y = float(0.0)
+    max_y = float(0.0)
+    min_z = float(0.0)
+    max_z = float(0.0)
 
-    # Max Y: support along +local_y, dot in local space
-    support_point = support_map(shape_data, local_y, data_provider)
-    max_y = wp.dot(local_y, support_point)
+    if shape_data.shape_type == GeoType.CONVEX_MESH:
+        # Single-pass AABB: iterate over vertices once, project onto all 3 axes.
+        # This replaces 6 separate support_map calls (each iterating all vertices)
+        # with 1 pass that computes min/max projections simultaneously.
+        mesh_ptr = unpack_mesh_ptr(shape_data.auxiliary)
+        mesh = wp.mesh_get(mesh_ptr)
+        mesh_scale = shape_data.scale
+        num_verts = mesh.points.shape[0]
 
-    # Max Z: support along +local_z, dot in local space
-    support_point = support_map(shape_data, local_z, data_provider)
-    max_z = wp.dot(local_z, support_point)
+        # Pre-scale axes: dot(local_axis, scale*v) == dot(scale*local_axis, v)
+        scaled_x = wp.cw_mul(local_x, mesh_scale)
+        scaled_y = wp.cw_mul(local_y, mesh_scale)
+        scaled_z = wp.cw_mul(local_z, mesh_scale)
 
-    # Min X: support along -local_x, dot in local space
-    support_point = support_map(shape_data, -local_x, data_provider)
-    min_x = wp.dot(local_x, support_point)
+        min_x = float(1.0e10)
+        max_x = float(-1.0e10)
+        min_y = float(1.0e10)
+        max_y = float(-1.0e10)
+        min_z = float(1.0e10)
+        max_z = float(-1.0e10)
 
-    # Min Y: support along -local_y, dot in local space
-    support_point = support_map(shape_data, -local_y, data_provider)
-    min_y = wp.dot(local_y, support_point)
+        for i in range(num_verts):
+            p = mesh.points[i]
+            vx = wp.dot(p, scaled_x)
+            vy = wp.dot(p, scaled_y)
+            vz = wp.dot(p, scaled_z)
+            min_x = wp.min(min_x, vx)
+            max_x = wp.max(max_x, vx)
+            min_y = wp.min(min_y, vy)
+            max_y = wp.max(max_y, vy)
+            min_z = wp.min(min_z, vz)
+            max_z = wp.max(max_z, vz)
+    else:
+        # Generic path: 6 support evaluations for other shape types (all O(1))
+        support_point = support_map(shape_data, local_x, data_provider)
+        max_x = wp.dot(local_x, support_point)
 
-    # Min Z: support along -local_z, dot in local space
-    support_point = support_map(shape_data, -local_z, data_provider)
-    min_z = wp.dot(local_z, support_point)
+        support_point = support_map(shape_data, local_y, data_provider)
+        max_y = wp.dot(local_y, support_point)
+
+        support_point = support_map(shape_data, local_z, data_provider)
+        max_z = wp.dot(local_z, support_point)
+
+        support_point = support_map(shape_data, -local_x, data_provider)
+        min_x = wp.dot(local_x, support_point)
+
+        support_point = support_map(shape_data, -local_y, data_provider)
+        min_y = wp.dot(local_y, support_point)
+
+        support_point = support_map(shape_data, -local_z, data_provider)
+        min_z = wp.dot(local_z, support_point)
 
     # AABB in world space (add world position to extents)
     aabb_min = wp.vec3(min_x, min_y, min_z) + center_pos
@@ -556,16 +623,22 @@ def check_infinite_plane_bsphere_overlap(
     return center_dist <= other_radius
 
 
-def create_find_contacts(writer_func: Any):
+def create_find_contacts(writer_func: Any, support_func: Any = None, post_process_contact: Any = None):
     """
     Factory function to create a find_contacts function with a specific writer function.
 
     Args:
         writer_func: Function to write contact data (signature: (ContactData, writer_data) -> None)
+        support_func: Support mapping function (defaults to support_map)
+        post_process_contact: Post-processing function (defaults to post_process_axial_on_discrete_contact)
 
     Returns:
         A find_contacts function with the writer function baked in
     """
+    if support_func is None:
+        support_func = support_map
+    if post_process_contact is None:
+        post_process_contact = post_process_axial_on_discrete_contact
 
     @wp.func
     def find_contacts(
@@ -630,7 +703,11 @@ def create_find_contacts(writer_func: Any):
             )
 
         # Compute and write contacts using GJK/MPR
-        wp.static(create_compute_gjk_mpr_contacts(writer_func))(
+        wp.static(
+            create_compute_gjk_mpr_contacts(
+                writer_func, post_process_contact=post_process_contact, support_func=support_func
+            )
+        )(
             shape_data_a,
             shape_data_b,
             quat_a,
@@ -665,14 +742,14 @@ def pre_contact_check(
     pair: wp.vec2i,
     mesh_id_a: wp.uint64,
     mesh_id_b: wp.uint64,
-    shape_pairs_mesh: wp.array(dtype=wp.vec2i),
-    shape_pairs_mesh_count: wp.array(dtype=int),
-    shape_pairs_mesh_plane: wp.array(dtype=wp.vec2i),
-    shape_pairs_mesh_plane_cumsum: wp.array(dtype=int),
-    shape_pairs_mesh_plane_count: wp.array(dtype=int),
-    mesh_plane_vertex_total_count: wp.array(dtype=int),
-    shape_pairs_mesh_mesh: wp.array(dtype=wp.vec2i),
-    shape_pairs_mesh_mesh_count: wp.array(dtype=int),
+    shape_pairs_mesh: wp.array[wp.vec2i],
+    shape_pairs_mesh_count: wp.array[int],
+    shape_pairs_mesh_plane: wp.array[wp.vec2i],
+    shape_pairs_mesh_plane_cumsum: wp.array[int],
+    shape_pairs_mesh_plane_count: wp.array[int],
+    mesh_plane_vertex_total_count: wp.array[int],
+    shape_pairs_mesh_mesh: wp.array[wp.vec2i],
+    shape_pairs_mesh_mesh_count: wp.array[int],
 ):
     """
     Perform pre-contact checks for early rejection and special case handling.
@@ -778,6 +855,73 @@ def pre_contact_check(
 
 
 @wp.func
+def aabb_to_unscaled(
+    aabb_lower: wp.vec3,
+    aabb_upper: wp.vec3,
+    scale: wp.vec3,
+) -> tuple[wp.vec3, wp.vec3]:
+    """Convert an axis-aligned bounding box from scaled local space to unscaled local space.
+
+    Given an AABB ``[aabb_lower, aabb_upper]`` expressed in a frame where geometry has been
+    pre-multiplied component-wise by ``scale``, return the equivalent AABB in the unscaled
+    frame (i.e. divided component-wise). Negative scale components flip the axis, so per-axis
+    min/max are swapped to keep ``lower <= upper``. Zero/near-zero components are guarded with
+    a small epsilon, but in practice ``scale`` should be non-zero whenever this is called.
+    """
+    eps = float(1.0e-12)
+    inv_x = 1.0 / wp.where(wp.abs(scale[0]) > eps, scale[0], wp.where(scale[0] >= 0.0, eps, -eps))
+    inv_y = 1.0 / wp.where(wp.abs(scale[1]) > eps, scale[1], wp.where(scale[1] >= 0.0, eps, -eps))
+    inv_z = 1.0 / wp.where(wp.abs(scale[2]) > eps, scale[2], wp.where(scale[2] >= 0.0, eps, -eps))
+
+    lx0 = aabb_lower[0] * inv_x
+    lx1 = aabb_upper[0] * inv_x
+    ly0 = aabb_lower[1] * inv_y
+    ly1 = aabb_upper[1] * inv_y
+    lz0 = aabb_lower[2] * inv_z
+    lz1 = aabb_upper[2] * inv_z
+
+    out_lower = wp.vec3(wp.min(lx0, lx1), wp.min(ly0, ly1), wp.min(lz0, lz1))
+    out_upper = wp.vec3(wp.max(lx0, lx1), wp.max(ly0, ly1), wp.max(lz0, lz1))
+    return out_lower, out_upper
+
+
+@wp.func
+def transform_normal_with_scale(
+    transform: wp.transform,
+    scale: wp.vec3,
+    normal_local: wp.vec3,
+) -> wp.vec3:
+    """Transform a unit normal from a (translated, rotated, component-wise scaled) local frame
+    to world space.
+
+    Under a non-uniform component-wise scale ``S = diag(scale)``, surface normals do **not**
+    transform like vectors: the correct rule is ``n_world ∝ R · S^{-T} · n_local`` which, for a
+    diagonal scale, reduces to ``R · (n_local / scale)``. The translation component of
+    ``transform`` is irrelevant for normals. The returned normal is normalized; if the scaled
+    normal is degenerate (zero length), the rotation-only transform of ``normal_local`` is
+    returned as a fallback.
+
+    This is the analog of ``wp.transform_vector`` for normals when the local frame includes a
+    non-uniform scale (e.g. a triangle mesh shape with ``shape_data.scale = (sx, sy, sz)``).
+    """
+    eps = float(1.0e-12)
+    sx = wp.where(wp.abs(scale[0]) > eps, scale[0], wp.where(scale[0] >= 0.0, eps, -eps))
+    sy = wp.where(wp.abs(scale[1]) > eps, scale[1], wp.where(scale[1] >= 0.0, eps, -eps))
+    sz = wp.where(wp.abs(scale[2]) > eps, scale[2], wp.where(scale[2] >= 0.0, eps, -eps))
+
+    n_scaled = wp.vec3(normal_local[0] / sx, normal_local[1] / sy, normal_local[2] / sz)
+    len_n = wp.length(n_scaled)
+    if len_n > eps:
+        n_scaled = n_scaled / len_n
+    else:
+        # Degenerate (e.g. a normal aligned with an axis collapsed to zero scale): fall
+        # back to rotating the unscaled local normal so the result is still well-defined.
+        n_scaled = normal_local
+
+    return wp.transform_vector(transform, n_scaled)
+
+
+@wp.func
 def mesh_vs_convex_midphase(
     idx_in_thread_block: int,
     mesh_shape: int,
@@ -785,12 +929,12 @@ def mesh_vs_convex_midphase(
     X_mesh_ws: wp.transform,
     X_ws: wp.transform,
     mesh_id: wp.uint64,
-    shape_type: wp.array(dtype=int),
-    shape_data: wp.array(dtype=wp.vec4),
-    shape_source_ptr: wp.array(dtype=wp.uint64),
+    shape_type: wp.array[int],
+    shape_data: wp.array[wp.vec4],
+    shape_source_ptr: wp.array[wp.uint64],
     rigid_gap: float,
-    triangle_pairs: wp.array(dtype=wp.vec3i),
-    triangle_pairs_count: wp.array(dtype=int),
+    triangle_pairs: wp.array[wp.vec3i],
+    triangle_pairs_count: wp.array[int],
 ):
     """
     Perform mesh vs convex shape midphase collision detection.
@@ -837,26 +981,39 @@ def mesh_vs_convex_midphase(
 
     data_provider = SupportMapDataProvider()
 
-    # Compute tight AABB directly in mesh local space for optimal fit
+    # Compute tight AABB in the mesh's *scaled* local frame (the same frame in which
+    # ``pos_in_mesh`` lives, i.e. the frame in which scaled mesh triangles are placed
+    # before being transformed by ``X_mesh_ws``).
     aabb_lower, aabb_upper = compute_tight_aabb_from_support(
         generic_shape_data, orientation_in_mesh, pos_in_mesh, data_provider
     )
 
-    # Add small margin for contact detection
-    margin_vec = wp.vec3(rigid_gap, rigid_gap, rigid_gap)
-    aabb_lower = aabb_lower - margin_vec
-    aabb_upper = aabb_upper + margin_vec
+    # The mesh's own BVH was built over the *unscaled* ``mesh.points``: the world
+    # position of vertex v is ``X_mesh_ws * (mesh_scale ⊙ v)``. Therefore we must
+    # convert both the AABB and the contact gap from scaled mesh-local space to
+    # unscaled (BVH) space before querying. With non-uniform scale this is a
+    # per-axis division; the gap, isotropic in world space, becomes anisotropic.
+    mesh_scale_vec4 = shape_data[mesh_shape]
+    mesh_scale = wp.vec3(mesh_scale_vec4[0], mesh_scale_vec4[1], mesh_scale_vec4[2])
+    aabb_lower_bvh, aabb_upper_bvh = aabb_to_unscaled(aabb_lower, aabb_upper, mesh_scale)
+
+    # Per-axis margin in BVH (unscaled) units. ``rigid_gap`` is a world-space
+    # distance; in unscaled mesh-local space that is ``rigid_gap / |mesh_scale_i|``
+    # along each axis.
+    margin_vec = wp.vec3(
+        rigid_gap / wp.max(wp.abs(mesh_scale[0]), 1.0e-12),
+        rigid_gap / wp.max(wp.abs(mesh_scale[1]), 1.0e-12),
+        rigid_gap / wp.max(wp.abs(mesh_scale[2]), 1.0e-12),
+    )
+    aabb_lower = aabb_lower_bvh - margin_vec
+    aabb_upper = aabb_upper_bvh + margin_vec
 
     if wp.static(ENABLE_TILE_BVH_QUERY):
         # Query mesh BVH for overlapping triangles in mesh local space using tiled version
         query = wp.tile_mesh_query_aabb(mesh_id, aabb_lower, aabb_upper)
 
-        result_tile = wp.tile_mesh_query_aabb_next(query)
-
-        # Continue querying while we have results
-        # Each iteration, each thread in the block gets one result (or -1)
-        while wp.tile_max(result_tile)[0] >= 0:
-            # Each thread processes its result from the tile
+        while wp.tile_query_valid(query):
+            result_tile = wp.tile_mesh_query_aabb_next(query)
             tri_index = wp.untile(result_tile)
 
             # Add this triangle pair to the output buffer if valid
@@ -873,12 +1030,9 @@ def mesh_vs_convex_midphase(
             offset_broadcast = offset_broadcast_tile[wp.block_dim() - 1]
 
             if tri_index >= 0:
-                # out_idx = wp.atomic_add(triangle_pairs_count, 0, 1)
                 out_idx = offset_broadcast + inclusive_scan[idx_in_thread_block] - has_tri
                 if out_idx < triangle_pairs.shape[0]:
                     triangle_pairs[out_idx] = wp.vec3i(mesh_shape, non_mesh_shape, tri_index)
-
-            result_tile = wp.tile_mesh_query_aabb_next(query)
     else:
         query = wp.mesh_query_aabb(mesh_id, aabb_lower, aabb_upper)
         tri_index = wp.int32(0)
@@ -894,7 +1048,7 @@ def mesh_vs_convex_midphase(
 @wp.func
 def find_pair_from_cumulative_index(
     global_idx: int,
-    cumulative_sums: wp.array(dtype=int),
+    cumulative_sums: wp.array[int],
     pair_count: int,
 ) -> tuple[int, int]:
     """

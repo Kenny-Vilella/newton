@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Defines the representation of discrete contacts in Kamino.
@@ -763,34 +751,34 @@ def _convert_contacts_newton_to_kamino(
     kamino_num_worlds: int32,
     kamino_max_contacts: int32,
     # Newton contact inputs
-    newton_contact_count: wp.array(dtype=int32),
-    newton_shape0: wp.array(dtype=int32),
-    newton_shape1: wp.array(dtype=int32),
-    newton_point0: wp.array(dtype=vec3f),
-    newton_point1: wp.array(dtype=vec3f),
-    newton_normal: wp.array(dtype=vec3f),
-    newton_thickness0: wp.array(dtype=float32),
-    newton_thickness1: wp.array(dtype=float32),
+    newton_contact_count: wp.array[int32],
+    newton_shape0: wp.array[int32],
+    newton_shape1: wp.array[int32],
+    newton_point0: wp.array[vec3f],
+    newton_point1: wp.array[vec3f],
+    newton_normal: wp.array[vec3f],
+    newton_thickness0: wp.array[float32],
+    newton_thickness1: wp.array[float32],
     # Model lookups
-    shape_body: wp.array(dtype=int32),
-    shape_world: wp.array(dtype=int32),
-    shape_mu: wp.array(dtype=float32),
-    shape_restitution: wp.array(dtype=float32),
-    body_q: wp.array(dtype=wp.transformf),
-    kamino_world_max_contacts: wp.array(dtype=int32),
+    shape_body: wp.array[int32],
+    shape_world: wp.array[int32],
+    shape_mu: wp.array[float32],
+    shape_restitution: wp.array[float32],
+    body_q: wp.array[wp.transformf],
+    kamino_world_max_contacts: wp.array[int32],
     # Kamino contact outputs
-    kamino_model_active: wp.array(dtype=int32),
-    kamino_world_active: wp.array(dtype=int32),
-    kamino_wid: wp.array(dtype=int32),
-    kamino_cid: wp.array(dtype=int32),
-    kamino_gid_AB: wp.array(dtype=vec2i),
-    kamino_bid_AB: wp.array(dtype=vec2i),
-    kamino_position_A: wp.array(dtype=vec3f),
-    kamino_position_B: wp.array(dtype=vec3f),
-    kamino_gapfunc: wp.array(dtype=vec4f),
-    kamino_frame: wp.array(dtype=quatf),
-    kamino_material: wp.array(dtype=vec2f),
-    kamino_key: wp.array(dtype=wp.uint64),
+    kamino_model_active: wp.array[int32],
+    kamino_world_active: wp.array[int32],
+    kamino_wid: wp.array[int32],
+    kamino_cid: wp.array[int32],
+    kamino_gid_AB: wp.array[vec2i],
+    kamino_bid_AB: wp.array[vec2i],
+    kamino_position_A: wp.array[vec3f],
+    kamino_position_B: wp.array[vec3f],
+    kamino_gapfunc: wp.array[vec4f],
+    kamino_frame: wp.array[quatf],
+    kamino_material: wp.array[vec2f],
+    kamino_key: wp.array[wp.uint64],
 ):
     """
     Convert Newton Contacts to Kamino's ContactsKamino format.
@@ -799,8 +787,7 @@ def _convert_contacts_newton_to_kamino(
     and populates the Kamino contact arrays with the A/B convention that Kamino's
     solver core expects (bid_B >= 0, normal points A -> B).
 
-    Newton's ``rigid_contact_normal`` points from shape1 toward shape0 (the
-    direction that pushes shape0 away from shape1).
+    Newton's ``rigid_contact_normal`` points from shape0 toward shape1 (A -> B).
     """
     tid = wp.tid()
     nc = newton_contact_count[0]
@@ -833,35 +820,35 @@ def _convert_contacts_newton_to_kamino(
     p0_world = wp.transform_point(X0, newton_point0[tid])
     p1_world = wp.transform_point(X1, newton_point1[tid])
 
-    # Newton normal points from shape1 → shape0.
+    # Newton normal points from shape0 → shape1 (A → B).
     # Kamino convention: normal points A → B, with bid_B >= 0.
     n_newton = newton_normal[tid]
 
     # Reconstruct Newton signed contact distance d from exported fields:
     # d = dot((p1 - p0), n_a_to_b) - (offset0 + offset1),
-    # with n_newton = -n_a_to_b and offset* stored in rigid_contact_thickness*.
-    d_newton = -wp.dot(p1_world - p0_world, n_newton) - (newton_thickness0[tid] + newton_thickness1[tid])
+    # with n_newton = n_a_to_b and offset* stored in rigid_contact_thickness*.
+    d_newton = wp.dot(p1_world - p0_world, n_newton) - (newton_thickness0[tid] + newton_thickness1[tid])
 
     if b1 < 0:
-        # shape1 is world-static → make it A, shape0 becomes B.
-        # Newton normal already points from shape1 (A) to shape0 (B).
+        # shape1 is world-static → make it Kamino A, shape0 becomes Kamino B.
+        # Kamino A→B = shape1→shape0, opposite of Newton's shape0→shape1, so negate.
         gid_A = s1
         gid_B = s0
         bid_A = b1
         bid_B = b0
         pos_A = p1_world
         pos_B = p0_world
-        normal = vec3f(n_newton[0], n_newton[1], n_newton[2])
+        normal = vec3f(-n_newton[0], -n_newton[1], -n_newton[2])
     else:
         # Both dynamic or shape0 is static → keep A=shape0, B=shape1.
-        # Newton normal goes shape1→shape0 = B→A, need A→B so negate.
+        # Newton normal already points A→B, matching Kamino convention.
         gid_A = s0
         gid_B = s1
         bid_A = b0
         bid_B = b1
         pos_A = p0_world
         pos_B = p1_world
-        normal = vec3f(-n_newton[0], -n_newton[1], -n_newton[2])
+        normal = vec3f(n_newton[0], n_newton[1], n_newton[2])
 
     distance = d_newton
     if distance > 0.0:
@@ -895,20 +882,20 @@ def _convert_contacts_newton_to_kamino(
 @wp.kernel
 def _convert_contacts_kamino_to_newton(
     max_output: int32,
-    model_active_contacts: wp.array(dtype=int32),
-    kamino_gid_AB: wp.array(dtype=vec2i),
-    kamino_position_A: wp.array(dtype=vec3f),
-    kamino_position_B: wp.array(dtype=vec3f),
-    kamino_gapfunc: wp.array(dtype=vec4f),
-    shape_body: wp.array(dtype=int32),
-    body_q: wp.array(dtype=wp.transformf),
+    model_active_contacts: wp.array[int32],
+    kamino_gid_AB: wp.array[vec2i],
+    kamino_position_A: wp.array[vec3f],
+    kamino_position_B: wp.array[vec3f],
+    kamino_gapfunc: wp.array[vec4f],
+    shape_body: wp.array[int32],
+    body_q: wp.array[wp.transformf],
     # outputs
-    rigid_contact_count: wp.array(dtype=int32),
-    rigid_contact_shape0: wp.array(dtype=int32),
-    rigid_contact_shape1: wp.array(dtype=int32),
-    rigid_contact_point0: wp.array(dtype=vec3f),
-    rigid_contact_point1: wp.array(dtype=vec3f),
-    rigid_contact_normal: wp.array(dtype=vec3f),
+    rigid_contact_count: wp.array[int32],
+    rigid_contact_shape0: wp.array[int32],
+    rigid_contact_shape1: wp.array[int32],
+    rigid_contact_point0: wp.array[vec3f],
+    rigid_contact_point1: wp.array[vec3f],
+    rigid_contact_normal: wp.array[vec3f],
 ):
     """Converts Kamino's internal contact representation to Newton's Contacts format."""
     # Retrieve the contact index for this thread

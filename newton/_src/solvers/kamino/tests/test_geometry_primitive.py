@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Unit tests for the collider functions of narrow-phase collision detection"""
 
@@ -96,14 +84,14 @@ single edge or corner, generating only 1 contact point.
 
 
 class PrimitiveBroadPhaseTestBS:
-    def __init__(self, model: ModelKamino, device: wp.DeviceLike = None):
+    def __init__(self, model: ModelKamino):
         # Retrieve the number of world
         num_worlds = model.size.num_worlds
         num_geoms = model.geoms.num_geoms
         # Construct collision pairs
         world_num_geom_pairs, model_wid = CollisionPipelinePrimitive._assert_shapes_supported(model, True)
         # Allocate the collision model data
-        with wp.ScopedDevice(device):
+        with wp.ScopedDevice(model.device):
             # Allocate the bounding volumes data
             self.bvdata = BoundingVolumesData(radius=wp.zeros(shape=(num_geoms,), dtype=float32))
             # Allocate the time-invariant collision candidates model
@@ -131,14 +119,14 @@ class PrimitiveBroadPhaseTestBS:
 
 
 class PrimitiveBroadPhaseTestAABB:
-    def __init__(self, model: ModelKamino, device: wp.DeviceLike = None):
+    def __init__(self, model: ModelKamino):
         # Retrieve the number of world
         num_worlds = model.size.num_worlds
         num_geoms = model.geoms.num_geoms
         # Construct collision pairs
         world_num_geom_pairs, model_wid = CollisionPipelinePrimitive._assert_shapes_supported(model, True)
         # Allocate the collision model data
-        with wp.ScopedDevice(device):
+        with wp.ScopedDevice(model.device):
             # Allocate the bounding volumes data
             self.bvdata = BoundingVolumesData(aabb=wp.zeros(shape=(num_geoms,), dtype=vec6f))
             # Allocate the time-invariant collision candidates model
@@ -179,9 +167,11 @@ def check_broadphase_allocations(
     broadphase: PrimitiveBroadPhaseType,
 ):
     # Calculate the maximum number of geometry pairs
-    model_candidate_pairs = builder.make_collision_candidate_pairs()
+    model_candidate_pairs, candidate_pairs_offset = builder.make_collision_candidate_pairs()
     num_candidate_pairs = len(model_candidate_pairs)
     # Construct a broad-phase
+    testcase.assertEqual(len(candidate_pairs_offset), builder.num_worlds + 1)
+    testcase.assertEqual(candidate_pairs_offset[-1], num_candidate_pairs)
     testcase.assertEqual(broadphase._cmodel.num_model_geom_pairs, num_candidate_pairs)
     testcase.assertEqual(sum(broadphase._cmodel.num_world_geom_pairs), num_candidate_pairs)
     testcase.assertEqual(broadphase._cmodel.model_num_pairs.size, 1)
@@ -215,7 +205,7 @@ def test_broadphase(
     state = model.state()
 
     # Create a broad-phase backend
-    broadphase = broadphase_type(model=model, device=device)
+    broadphase = broadphase_type(model=model)
     check_broadphase_allocations(testcase, builder, broadphase)
 
     # Perform broad-phase collision detection and check results
@@ -396,7 +386,7 @@ def test_narrowphase(
         state = model.state()
 
         # Create a broad-phase backend
-        broadphase = bp_type(model=model, device=device)
+        broadphase = bp_type(model=model)
         broadphase.collide(model, data, state, default_gap=gap)
 
         # Create a contacts container
@@ -1076,7 +1066,7 @@ class TestPipelinePrimitive(unittest.TestCase):
         contacts.clear()
 
         # Create the collision pipeline
-        pipeline = CollisionPipelinePrimitive(model=model, device=self.default_device)
+        pipeline = CollisionPipelinePrimitive(model=model)
 
         # Run collision detection
         pipeline.collide(data, state, contacts)

@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 KAMINO: Linear Algebra: Core types and utilities for sparse multi-world linear systems
@@ -197,6 +185,11 @@ class BlockSparseMatrices:
     Host-side cache of the maximum of the maximum matrix dimensions over all sparse matrices.
     """
 
+    sum_of_max_dims: tuple[int, int] = (0, 0)
+    """
+    Host-side cache of the sum of the maximum matrix dimensions over all sparse matrices.
+    """
+
     ###
     # On-device Data (Constant)
     ###
@@ -301,6 +294,7 @@ class BlockSparseMatrices:
             ptr=self.dims.ptr,
             strides=(2 * index_dtype_size_bytes,),
             copy=False,
+            device=self.device,
         )
 
     @property
@@ -313,6 +307,7 @@ class BlockSparseMatrices:
             ptr=self.dims.ptr + index_dtype_size_bytes,
             strides=(2 * index_dtype_size_bytes,),
             copy=False,
+            device=self.device,
         )
 
     @property
@@ -325,6 +320,7 @@ class BlockSparseMatrices:
             ptr=self.nzb_coords.ptr,
             strides=(2 * index_dtype_size_bytes,),
             copy=False,
+            device=self.device,
         )
 
     @property
@@ -337,6 +333,7 @@ class BlockSparseMatrices:
             ptr=self.nzb_coords.ptr + index_dtype_size_bytes,
             strides=(2 * index_dtype_size_bytes,),
             copy=False,
+            device=self.device,
         )
 
     ###
@@ -416,6 +413,7 @@ class BlockSparseMatrices:
         # Update memory allocation meta-data caches
         self.num_matrices = len(capacities)
         self.max_of_max_dims = tuple(max(x) for x in zip(*max_dims, strict=True))
+        self.sum_of_max_dims = tuple(sum(x) for x in zip(*max_dims, strict=True))
         self.sum_of_num_nzb = sum(capacities)
         self.max_of_num_nzb = max(capacities)
 
@@ -588,8 +586,8 @@ class BlockSparseMatrices:
 
 @wp.kernel
 def _copy_square_dims_kernel(
-    src_dim: wp.array(dtype=int32),
-    dst_dims: wp.array2d(dtype=int32),
+    src_dim: wp.array[int32],
+    dst_dims: wp.array2d[int32],
 ):
     """Copies square dimensions from 1D array to 2D (n, n) format."""
     wid = wp.tid()
@@ -608,15 +606,15 @@ def _make_dense_to_bsm_detect_kernel(block_size: int):
     @wp.kernel
     def kernel(
         # Dense matrix info
-        dense_dim: wp.array(dtype=int32),
-        dense_mio: wp.array(dtype=int32),
-        dense_mat: wp.array(dtype=float32),
+        dense_dim: wp.array[int32],
+        dense_mio: wp.array[int32],
+        dense_mat: wp.array[float32],
         # BSM info
-        max_nzb: wp.array(dtype=int32),
-        nzb_start: wp.array(dtype=int32),
+        max_nzb: wp.array[int32],
+        nzb_start: wp.array[int32],
         # Outputs
-        num_nzb: wp.array(dtype=int32),
-        nzb_coords: wp.array2d(dtype=int32),
+        num_nzb: wp.array[int32],
+        nzb_coords: wp.array2d[int32],
     ):
         wid, bi, bj = wp.tid()
 
@@ -667,15 +665,15 @@ def _make_dense_to_bsm_copy_kernel(block_size: int):
     @wp.kernel
     def kernel(
         # Dense matrix info
-        dense_dim: wp.array(dtype=int32),
-        dense_mio: wp.array(dtype=int32),
-        dense_mat: wp.array(dtype=float32),
+        dense_dim: wp.array[int32],
+        dense_mio: wp.array[int32],
+        dense_mat: wp.array[float32],
         # BSM info
-        nzb_start: wp.array(dtype=int32),
-        num_nzb: wp.array(dtype=int32),
-        nzb_coords: wp.array2d(dtype=int32),
+        nzb_start: wp.array[int32],
+        num_nzb: wp.array[int32],
+        nzb_coords: wp.array2d[int32],
         # Output
-        nzb_values: wp.array(dtype=mat_type),
+        nzb_values: wp.array[mat_type],
     ):
         wid, block_idx = wp.tid()
 

@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """Provides a host-side container to summarily describe simulation world."""
 
@@ -453,12 +441,12 @@ class WorldDescriptor(Descriptor):
         joint.jid = int(self.num_joints)
         joint.coords_offset = int(self.num_joint_coords)
         joint.dofs_offset = int(self.num_joint_dofs)
-        joint.passive_coords_offset = int(self.num_passive_joint_coords) if joint.is_passive else -1
-        joint.passive_dofs_offset = int(self.num_passive_joint_dofs) if joint.is_passive else -1
-        joint.actuated_coords_offset = int(self.num_actuated_joint_coords) if joint.is_actuated else -1
-        joint.actuated_dofs_offset = int(self.num_actuated_joint_dofs) if joint.is_actuated else -1
+        joint.passive_coords_offset = int(self.num_passive_joint_coords)
+        joint.passive_dofs_offset = int(self.num_passive_joint_dofs)
+        joint.actuated_coords_offset = int(self.num_actuated_joint_coords)
+        joint.actuated_dofs_offset = int(self.num_actuated_joint_dofs)
         joint.cts_offset = int(self.num_joint_cts)
-        joint.dynamic_cts_offset = int(self.num_dynamic_joint_cts) if joint.num_dynamic_cts > 0 else -1
+        joint.dynamic_cts_offset = int(self.num_dynamic_joint_cts)
         joint.kinematic_cts_offset = int(self.num_kinematic_joint_cts)
 
         # Append joint identifiers
@@ -488,8 +476,6 @@ class WorldDescriptor(Descriptor):
 
         # Append joint control group info
         if joint.act_type == JointActuationType.PASSIVE:
-            joint.passive_coords_offset = int(self.num_passive_joint_coords)
-            joint.passive_dofs_offset = int(self.num_passive_joint_dofs)
             self.has_passive_dofs = True
             self.num_passive_joints += 1
             self.num_passive_joint_coords += joint.num_coords
@@ -498,8 +484,6 @@ class WorldDescriptor(Descriptor):
             self.joint_passive_dofs.append(joint.num_dofs)
             self.passive_joint_names.append(joint.name)
         else:
-            joint.actuated_coords_offset = int(self.num_actuated_joint_coords)
-            joint.actuated_dofs_offset = int(self.num_actuated_joint_dofs)
             self.has_actuated_dofs = True
             self.num_actuated_joints += 1
             self.num_actuated_joint_coords += joint.num_coords
