@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import os
 import tempfile
@@ -325,25 +313,9 @@ class TestHeightfield(unittest.TestCase):
         scale = (1.0, 1.0, 1.0)
         radius = compute_shape_radius(newton.GeoType.HFIELD, scale, hfield)
 
-        # Expected: sqrt(hx^2 + hy^2 + ((max_z - min_z)/2)^2)
-        expected_radius = np.sqrt(4.0**2 + 3.0**2 + ((2.0 - 0.0) / 2) ** 2)
+        # Expected: sqrt(hx^2 + hy^2 + max(|min_z|, |max_z|)^2)
+        expected_radius = np.sqrt(4.0**2 + 3.0**2 + max(abs(0.0), abs(2.0)) ** 2)
         self.assertAlmostEqual(radius, expected_radius, places=5)
-
-    def test_heightfield_finalize(self):
-        """Test heightfield finalization to Warp array."""
-        nrow, ncol = 5, 5
-        elevation_data = np.random.default_rng(42).random((nrow, ncol)).astype(np.float32)
-
-        hfield = Heightfield(data=elevation_data, nrow=nrow, ncol=ncol, hx=2.0, hy=2.0)
-
-        ptr = hfield.finalize()
-        self.assertIsInstance(ptr, int)
-        self.assertGreater(ptr, 0)
-        self.assertIsNotNone(hfield.warp_array)
-
-        # Finalized array should be 1D (flattened)
-        self.assertEqual(len(hfield.warp_array.shape), 1)
-        self.assertEqual(hfield.warp_array.shape[0], nrow * ncol)
 
     def test_heightfield_native_collision_flat(self):
         """Test native CollisionPipeline detects contact between sphere and flat heightfield."""
@@ -369,6 +341,36 @@ class TestHeightfield(unittest.TestCase):
         # Should detect at least one contact (sphere is within contact margin of heightfield)
         contact_count = int(contacts.rigid_contact_count.numpy()[0])
         self.assertGreater(contact_count, 0, "No contacts detected between sphere and heightfield")
+
+    def test_heightfield_native_collision_scaled(self):
+        """Per-instance ``scale`` on ``add_shape_heightfield`` is honored by narrow-phase.
+
+        The sphere sits at XY=(1.5, 0) -- inside the scaled extent ``[-2, 2]`` but
+        outside the unscaled asset extent ``[-1, 1]``. A pre-fix build (narrow-phase
+        ignoring ``scale``) would treat the sphere as outside the heightfield
+        footprint and generate no contacts.
+        """
+        builder = newton.ModelBuilder()
+
+        nrow, ncol = 10, 10
+        elevation = np.zeros((nrow, ncol), dtype=np.float32)
+        # Small heightfield (hx=hy=1) scaled 2x in XY; baked extent becomes [-2, 2].
+        hfield = Heightfield(data=elevation, nrow=nrow, ncol=ncol, hx=1.0, hy=1.0, min_z=0.0, max_z=1.0)
+        builder.add_shape_heightfield(heightfield=hfield, scale=(2.0, 2.0, 1.0))
+
+        # Sphere straddling the scaled surface at XY=(1.5, 0).
+        sphere_body = builder.add_body(xform=wp.transform((1.5, 0.0, 0.05), wp.quat_identity()))
+        builder.add_shape_sphere(body=sphere_body, radius=0.1)
+
+        model = builder.finalize()
+        state = model.state()
+
+        pipeline = newton.CollisionPipeline(model)
+        contacts = pipeline.contacts()
+        pipeline.collide(state, contacts)
+
+        contact_count = int(contacts.rigid_contact_count.numpy()[0])
+        self.assertGreater(contact_count, 0, "No contacts detected between sphere and scaled heightfield")
 
     def test_heightfield_native_collision_no_contact(self):
         """Test that no contacts are generated when sphere is far above heightfield."""

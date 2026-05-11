@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """
 Tests for the XPBD solver.
@@ -25,6 +13,7 @@ import numpy as np
 import warp as wp
 
 import newton
+import newton.examples
 from newton.tests.unittest_utils import add_function_test, get_test_devices
 
 
@@ -380,6 +369,386 @@ def test_particle_shape_restitution_accounts_for_body_velocity(test, device):
     )
 
 
+def test_articulation_contact_drift(test, device):
+    """
+    Regression test for articulated bodies drifting laterally on the ground (#2030).
+
+    When joints are solved before contacts in the XPBD iteration loop, joint
+    corrections displace bodies laterally and contact friction can't fully
+    counteract the displacement. Over many steps, the residual accumulates
+    into visible sliding.
+
+    Setup:
+    - Load a quadruped URDF on its side on the ground plane.
+    - Let it settle for 2 seconds, then simulate for 3 more seconds.
+    - Check that the root body hasn't drifted laterally.
+    """
+    builder = newton.ModelBuilder()
+    builder.default_joint_cfg.armature = 0.01
+    builder.default_joint_cfg.target_ke = 2000.0
+    builder.default_joint_cfg.target_kd = 1.0
+    builder.default_shape_cfg.ke = 1.0e4
+    builder.default_shape_cfg.kd = 1.0e2
+    builder.default_shape_cfg.kf = 1.0e2
+    builder.default_shape_cfg.mu = 1.0
+
+    # Place the quadruped on its side (rotated 90 degrees around X axis)
+    rot = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), wp.PI * 0.5)
+    builder.add_urdf(
+        newton.examples.get_asset("quadruped.urdf"),
+        xform=wp.transform(wp.vec3(0.0, 0.0, 0.3), rot),
+        floating=True,
+        enable_self_collisions=False,
+        ignore_inertial_definitions=True,
+    )
+    armature_inertia = wp.mat33(np.eye(3, dtype=np.float32)) * 0.01
+    for i in range(builder.body_count):
+        builder.body_inertia[i] = builder.body_inertia[i] + armature_inertia
+
+    builder.joint_q[-12:] = [0.2, 0.4, -0.6, -0.2, -0.4, 0.6, -0.2, 0.4, -0.6, 0.2, -0.4, 0.6]
+    builder.joint_target_pos[-12:] = builder.joint_q[-12:]
+    builder.add_ground_plane()
+
+    model = builder.finalize(device=device)
+    solver = newton.solvers.SolverXPBD(model)
+
+    state_0 = model.state()
+    state_1 = model.state()
+    control = model.control()
+    contacts = model.contacts()
+
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state_0)
+
+    fps = 100
+    frame_dt = 1.0 / fps
+    sim_substeps = 10
+    sim_dt = frame_dt / sim_substeps
+
+    # Let the quadruped settle after drop (2 seconds)
+    for _ in range(200):
+        for _ in range(sim_substeps):
+            state_0.clear_forces()
+            model.collide(state_0, contacts)
+            solver.step(state_0, state_1, control, contacts, sim_dt)
+            state_0, state_1 = state_1, state_0
+
+    body_q = state_0.body_q.numpy()
+    initial_x = float(body_q[0][0])
+    initial_y = float(body_q[0][1])
+
+    # Simulate for 3 more seconds
+    for _ in range(300):
+        for _ in range(sim_substeps):
+            state_0.clear_forces()
+            model.collide(state_0, contacts)
+            solver.step(state_0, state_1, control, contacts, sim_dt)
+            state_0, state_1 = state_1, state_0
+
+    body_q = state_0.body_q.numpy()
+    final_x = float(body_q[0][0])
+    final_y = float(body_q[0][1])
+
+    drift_x = abs(final_x - initial_x)
+    drift_y = abs(final_y - initial_y)
+    drift_xy = float(np.hypot(drift_x, drift_y))
+
+    # The root body should not drift more than 1 cm laterally over 3 seconds
+    # (Z is up, so X and Y are the lateral axes)
+    # Without the fix, Y drifts ~5.9 mm/s → ~1.8 cm over 3 seconds.
+    max_drift = 0.01
+    test.assertLess(
+        drift_xy,
+        max_drift,
+        msg=(
+            f"Root body drifted {drift_xy:.4f} m laterally over 3 seconds "
+            f"(dx={drift_x:.4f}, dy={drift_y:.4f}, max allowed: {max_drift})"
+        ),
+    )
+
+
+def test_xpbd_contact_force_static_equilibrium(test, device):
+    """Steady-state contact-force regression suite for XPBD.
+
+    Four scenarios run together in a single model so they share one settle phase
+    and one averaging window. Each scenario is placed far apart on the X axis so
+    contact pairs never mix between scenarios:
+
+    - small sphere on plane (Fz = -mg)
+    - heavy sphere on plane (Fz = -mg, mass-independent)
+    - box on plane (4 corner contacts; summed Fz = -mg, regression for the
+      ``rigid_contact_con_weighting`` N*mg inflation bug)
+    - mini pyramid (two bottom cubes + one top cube; ground reaction on each
+      bottom cube = own weight + half the top cube ≈ 1.5*mg)
+    """
+    gravity = 9.81
+
+    sphere_radius = 0.25
+    sphere_density = 1000.0
+    sphere_mass = sphere_density * (4.0 / 3.0) * np.pi * sphere_radius**3
+
+    heavy_radius = 0.5
+    heavy_density = 2000.0
+    heavy_mass = heavy_density * (4.0 / 3.0) * np.pi * heavy_radius**3
+
+    box_h = 0.5
+    box_density = 1000.0
+    box_mass = box_density * (2.0 * box_h) ** 3
+
+    cube_h = 0.5
+    cube_density = 1000.0
+    cube_mass = cube_density * (2.0 * cube_h) ** 3
+    cube_mg = cube_mass * gravity
+
+    builder = newton.ModelBuilder()
+    builder.add_ground_plane()
+    ground_shape = 0
+
+    builder.default_shape_cfg.density = sphere_density
+    sphere_body = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, sphere_radius), wp.quat_identity()))
+    builder.add_shape_sphere(body=sphere_body, radius=sphere_radius)
+
+    builder.default_shape_cfg.density = heavy_density
+    heavy_body = builder.add_body(xform=wp.transform(wp.vec3(10.0, 0.0, heavy_radius), wp.quat_identity()))
+    builder.add_shape_sphere(body=heavy_body, radius=heavy_radius)
+
+    builder.default_shape_cfg.density = box_density
+    box_body = builder.add_body(xform=wp.transform(wp.vec3(20.0, 0.0, box_h), wp.quat_identity()))
+    builder.add_shape_box(body=box_body, hx=box_h, hy=box_h, hz=box_h)
+
+    builder.default_shape_cfg.density = cube_density
+    pyramid_x = 30.0
+    cube_left_body = builder.add_body(xform=wp.transform(wp.vec3(pyramid_x - cube_h, 0.0, cube_h), wp.quat_identity()))
+    builder.add_shape_box(body=cube_left_body, hx=cube_h, hy=cube_h, hz=cube_h)
+    cube_right_body = builder.add_body(xform=wp.transform(wp.vec3(pyramid_x + cube_h, 0.0, cube_h), wp.quat_identity()))
+    builder.add_shape_box(body=cube_right_body, hx=cube_h, hy=cube_h, hz=cube_h)
+    cube_top_body = builder.add_body(xform=wp.transform(wp.vec3(pyramid_x, 0.0, 3.0 * cube_h), wp.quat_identity()))
+    builder.add_shape_box(body=cube_top_body, hx=cube_h, hy=cube_h, hz=cube_h)
+
+    model = builder.finalize(device=device)
+    model.request_contact_attributes("force")
+
+    solver = newton.solvers.SolverXPBD(model, iterations=32, rigid_contact_con_weighting=True)
+    state_in = model.state()
+    state_out = model.state()
+    control = model.control()
+    contacts = model.contacts()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state_in)
+
+    dt = 1.0 / 60.0
+    num_substeps = 8
+    sub_dt = dt / num_substeps
+    settle_steps = 200  # max needed across scenarios (pyramid stack)
+    avg_steps = 60
+
+    for _ in range(settle_steps):
+        for _ in range(num_substeps):
+            state_in.clear_forces()
+            model.collide(state_in, contacts)
+            solver.step(state_in, state_out, control, contacts, sub_dt)
+            state_in, state_out = state_out, state_in
+
+    shape_body_np = model.shape_body.numpy()
+
+    sphere_force = np.zeros(3)
+    heavy_force = np.zeros(3)
+    box_force = np.zeros(3)
+    cube_left_fz_on_body = 0.0
+    cube_right_fz_on_body = 0.0
+
+    for _ in range(avg_steps):
+        for _ in range(num_substeps):
+            state_in.clear_forces()
+            model.collide(state_in, contacts)
+            solver.step(state_in, state_out, control, contacts, sub_dt)
+            state_in, state_out = state_out, state_in
+        solver.update_contacts(contacts, state_in)
+
+        nc = int(contacts.rigid_contact_count.numpy()[0])
+        if nc == 0:
+            continue
+        forces = contacts.force.numpy()[:nc, :3]
+        s0 = contacts.rigid_contact_shape0.numpy()[:nc]
+        s1 = contacts.rigid_contact_shape1.numpy()[:nc]
+
+        box_step_count = 0
+        for ci in range(nc):
+            # ``contacts.force`` is force on body0 by body1. Sum into a "force-on-ground"
+            # bucket regardless of which side ground was recorded as: flip sign when
+            # ground is shape1 so the final values consistently match -mg downward.
+            if s0[ci] == ground_shape:
+                other_shape = s1[ci]
+                f = forces[ci]
+            elif s1[ci] == ground_shape:
+                other_shape = s0[ci]
+                f = -forces[ci]
+            else:
+                continue  # body-body contact (top cube against bottom cubes); not asserted
+            if other_shape < 0:
+                continue
+            other_body = shape_body_np[other_shape]
+            if other_body == sphere_body:
+                sphere_force += f
+            elif other_body == heavy_body:
+                heavy_force += f
+            elif other_body == box_body:
+                box_force += f
+                box_step_count += 1
+            elif other_body == cube_left_body:
+                cube_left_fz_on_body += -f[2]
+            elif other_body == cube_right_body:
+                cube_right_fz_on_body += -f[2]
+
+        test.assertGreater(box_step_count, 1, "Box should generate multiple ground contact points")
+
+    sphere_force /= avg_steps
+    heavy_force /= avg_steps
+    box_force /= avg_steps
+    cube_left_fz_on_body /= avg_steps
+    cube_right_fz_on_body /= avg_steps
+
+    np.testing.assert_allclose(
+        sphere_force[2],
+        -sphere_mass * gravity,
+        rtol=0.05,
+        err_msg="Sphere on plane: vertical contact force should match -mg",
+    )
+    np.testing.assert_allclose(
+        sphere_force[0], 0.0, atol=0.5, err_msg="Sphere on plane: horizontal X force should be ~0"
+    )
+    np.testing.assert_allclose(
+        sphere_force[1], 0.0, atol=0.5, err_msg="Sphere on plane: horizontal Y force should be ~0"
+    )
+
+    np.testing.assert_allclose(
+        heavy_force[2],
+        -heavy_mass * gravity,
+        rtol=0.05,
+        err_msg="Heavy sphere on plane: vertical contact force should match -mg",
+    )
+    np.testing.assert_allclose(
+        heavy_force[0], 0.0, atol=0.5, err_msg="Heavy sphere on plane: horizontal X force should be ~0"
+    )
+    np.testing.assert_allclose(
+        heavy_force[1], 0.0, atol=0.5, err_msg="Heavy sphere on plane: horizontal Y force should be ~0"
+    )
+
+    np.testing.assert_allclose(
+        box_force[2],
+        -box_mass * gravity,
+        rtol=0.10,
+        err_msg="Box on plane: total vertical contact force over multiple contacts should match -mg, not N*mg",
+    )
+    np.testing.assert_allclose(box_force[0], 0.0, atol=1.0, err_msg="Box on plane: horizontal X force should be ~0")
+    np.testing.assert_allclose(box_force[1], 0.0, atol=1.0, err_msg="Box on plane: horizontal Y force should be ~0")
+
+    np.testing.assert_allclose(
+        cube_left_fz_on_body,
+        1.5 * cube_mg,
+        rtol=0.15,
+        err_msg=f"Pyramid: ground reaction on left bottom cube should be ~1.5*mg={1.5 * cube_mg:.0f}, got {cube_left_fz_on_body:.0f}",
+    )
+    np.testing.assert_allclose(
+        cube_right_fz_on_body,
+        1.5 * cube_mg,
+        rtol=0.15,
+        err_msg=f"Pyramid: ground reaction on right bottom cube should be ~1.5*mg={1.5 * cube_mg:.0f}, got {cube_right_fz_on_body:.0f}",
+    )
+
+
+def test_xpbd_contact_force_zero_when_no_contact(test, device):
+    """A sphere in free-fall (no ground) should produce zero contact force."""
+    radius = 0.25
+
+    builder = newton.ModelBuilder()
+    body = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 5.0), wp.quat_identity()))
+    builder.add_shape_sphere(body=body, radius=radius)
+    model = builder.finalize(device=device)
+    model.request_contact_attributes("force")
+
+    solver = newton.solvers.SolverXPBD(model, iterations=2)
+    state_in = model.state()
+    state_out = model.state()
+    control = model.control()
+    contacts = model.contacts()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state_in)
+
+    dt = 1.0 / 60.0
+    state_in.clear_forces()
+    model.collide(state_in, contacts)
+    solver.step(state_in, state_out, control, contacts, dt)
+    solver.update_contacts(contacts, state_out)
+
+    ncontacts = int(contacts.rigid_contact_count.numpy()[0])
+    if ncontacts > 0:
+        forces = contacts.force.numpy()[:ncontacts]
+        np.testing.assert_allclose(forces, 0.0, atol=1e-6, err_msg="No contact force expected in free-fall")
+
+
+def test_xpbd_contact_force_zero_when_not_touching(test, device):
+    """A sphere near a ground plane with a large gap: contact pair exists but force is zero."""
+    radius = 0.25
+    gap = 1.0
+    # Place sphere so it's within the gap (contact pair generated) but not penetrating.
+    # Ground is at z=0, sphere center at z = radius + 0.5*gap (well above surface).
+    z = radius + 0.5 * gap
+
+    builder = newton.ModelBuilder()
+    builder.default_shape_cfg.gap = gap
+    builder.add_ground_plane()
+    body = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, z), wp.quat_identity()))
+    builder.add_shape_sphere(body=body, radius=radius)
+    model = builder.finalize(device=device)
+    model.set_gravity(wp.vec3(0.0, 0.0, 0.0))
+    model.request_contact_attributes("force")
+
+    solver = newton.solvers.SolverXPBD(model, iterations=2)
+    state_in = model.state()
+    state_out = model.state()
+    control = model.control()
+    contacts = model.contacts()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state_in)
+
+    state_in.clear_forces()
+    model.collide(state_in, contacts)
+
+    ncontacts = int(contacts.rigid_contact_count.numpy()[0])
+    test.assertGreater(ncontacts, 0, "Gap should cause a contact pair to be generated")
+
+    solver.step(state_in, state_out, control, contacts, 1.0 / 60.0)
+    solver.update_contacts(contacts, state_out)
+
+    forces = contacts.force.numpy()[:ncontacts, :3]
+    np.testing.assert_allclose(
+        forces,
+        0.0,
+        atol=1e-6,
+        err_msg="Contact pair within gap but not touching should report zero force",
+    )
+
+
+def test_xpbd_update_contacts_requires_force_attribute(test, device):
+    """update_contacts should raise ValueError when contacts.force is not allocated."""
+    builder = newton.ModelBuilder()
+    builder.add_ground_plane()
+    body = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 0.25), wp.quat_identity()))
+    builder.add_shape_sphere(body=body, radius=0.25)
+    model = builder.finalize(device=device)
+
+    solver = newton.solvers.SolverXPBD(model, iterations=2)
+    state_in = model.state()
+    state_out = model.state()
+    control = model.control()
+    contacts = model.contacts()
+
+    state_in.clear_forces()
+    model.collide(state_in, contacts)
+    solver.step(state_in, state_out, control, contacts, 1.0 / 60.0)
+
+    test.assertIsNone(contacts.force)
+    with test.assertRaises(ValueError):
+        solver.update_contacts(contacts)
+
+
 devices = get_test_devices(mode="basic")
 
 
@@ -416,6 +785,47 @@ add_function_test(
     TestSolverXPBD,
     "test_particle_shape_restitution_accounts_for_body_velocity",
     test_particle_shape_restitution_accounts_for_body_velocity,
+    devices=devices,
+    check_output=False,
+)
+
+
+add_function_test(
+    TestSolverXPBD,
+    "test_articulation_contact_drift",
+    test_articulation_contact_drift,
+    devices=devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestSolverXPBD,
+    "test_xpbd_contact_force_static_equilibrium",
+    test_xpbd_contact_force_static_equilibrium,
+    devices=devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestSolverXPBD,
+    "test_xpbd_contact_force_zero_when_no_contact",
+    test_xpbd_contact_force_zero_when_no_contact,
+    devices=devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestSolverXPBD,
+    "test_xpbd_contact_force_zero_when_not_touching",
+    test_xpbd_contact_force_zero_when_not_touching,
+    devices=devices,
+    check_output=False,
+)
+
+add_function_test(
+    TestSolverXPBD,
+    "test_xpbd_update_contacts_requires_force_attribute",
+    test_xpbd_update_contacts_requires_force_attribute,
     devices=devices,
     check_output=False,
 )

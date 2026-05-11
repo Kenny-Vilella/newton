@@ -1,21 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 from .broad_phase_common import test_group_pair, test_world_and_group_pair
 from .broad_phase_nxn import BroadPhaseAllPairs, BroadPhaseExplicit
 from .broad_phase_sap import BroadPhaseSAP
+from .bvh import (
+    build_bvh_particle,
+    build_bvh_shape,
+    refit_bvh_particle,
+    refit_bvh_shape,
+)
 from .collision_primitive import (
     collide_box_box,
     collide_capsule_box,
@@ -30,6 +24,7 @@ from .collision_primitive import (
     collide_sphere_cylinder,
     collide_sphere_sphere,
 )
+from .contact_match import MATCH_BROKEN, MATCH_NOT_FOUND
 from .flags import ParticleFlags, ShapeFlags
 from .inertia import compute_inertia_shape, compute_inertia_sphere, transform_inertia
 from .sdf_utils import SDF
@@ -44,6 +39,8 @@ from .types import (
 from .utils import compute_shape_radius
 
 __all__ = [
+    "MATCH_BROKEN",
+    "MATCH_NOT_FOUND",
     "SDF",
     "BroadPhaseAllPairs",
     "BroadPhaseExplicit",
@@ -55,6 +52,8 @@ __all__ = [
     "ParticleFlags",
     "ShapeFlags",
     "TetMesh",
+    "build_bvh_particle",
+    "build_bvh_shape",
     "collide_box_box",
     "collide_capsule_box",
     "collide_capsule_capsule",
@@ -72,6 +71,8 @@ __all__ = [
     "compute_shape_radius",
     "create_mesh_heightfield",
     "create_mesh_terrain",
+    "refit_bvh_particle",
+    "refit_bvh_shape",
     "test_group_pair",
     "test_world_and_group_pair",
     "transform_inertia",

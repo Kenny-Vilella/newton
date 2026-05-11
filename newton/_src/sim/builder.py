@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 """A module for building Newton models."""
 
@@ -19,16 +7,20 @@ from __future__ import annotations
 
 import copy
 import ctypes
+import inspect
 import math
 import warnings
 from collections import Counter, deque
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 import numpy as np
 import warp as wp
 
+from ..actuators.clamping.clamping_max_effort import ClampingMaxEffort
+from ..actuators.controllers.controller_pd import ControllerPD
+from ..actuators.controllers.controller_pid import ControllerPID
 from ..core.types import (
     MAXVAL,
     Axis,
@@ -43,7 +35,6 @@ from ..core.types import (
     Vec6,
     axis_to_vec3,
     flag_to_int,
-    nparray,
 )
 from ..geometry import (
     Gaussian,
@@ -77,10 +68,16 @@ from .graph_coloring import (
 )
 from .model import Model
 
+try:
+    from newton_actuators import Actuator as _LegacyActuator
+except ImportError:
+    _LegacyActuator = None
+
 if TYPE_CHECKING:
-    from newton_actuators import Actuator
     from pxr import Usd
 
+    from ..actuators.clamping.base import Clamping
+    from ..actuators.controllers.base import Controller
     from ..geometry.types import TetMesh
 
     UsdStage = Usd.Stage
@@ -176,18 +173,59 @@ class ModelBuilder:
 
     """
 
+    _DEFAULT_GROUND_PLANE_COLOR = (0.125, 0.125, 0.15)
+    _SHAPE_COLOR_PALETTE = (
+        # Paul Tol - Bright 9
+        (68, 119, 170),  # blue
+        (102, 204, 238),  # cyan
+        (34, 136, 51),  # green
+        (204, 187, 68),  # yellow
+        (238, 102, 119),  # red
+        (170, 51, 119),  # magenta
+        (238, 153, 51),  # orange
+        (0, 153, 136),  # teal
+    )
+    _BODY_ARMATURE_ARG_DEPRECATION_MESSAGE = (
+        "ModelBuilder.add_link(..., armature=...) and ModelBuilder.add_body(..., armature=...) "
+        "are deprecated and will be removed in a future release. "
+        "Add any isotropic artificial inertia directly to 'inertia' instead."
+    )
+    _DEFAULT_BODY_ARMATURE_DEPRECATION_MESSAGE = (
+        "ModelBuilder.default_body_armature is deprecated and will be removed in a future release. "
+        "Add any isotropic artificial inertia directly to 'inertia' instead."
+    )
+
+    @staticmethod
+    def _shape_palette_color(index: int) -> tuple[float, float, float]:
+        color = ModelBuilder._SHAPE_COLOR_PALETTE[index % len(ModelBuilder._SHAPE_COLOR_PALETTE)]
+        return (color[0] / 255.0, color[1] / 255.0, color[2] / 255.0)
+
+    @staticmethod
+    def _coerce_shape_color(color: Vec3 | None) -> tuple[float, float, float] | None:
+        if color is None:
+            return None
+        return (float(color[0]), float(color[1]), float(color[2]))
+
     @dataclass
     class ActuatorEntry:
-        """Stores accumulated indices and arguments for one actuator type + scalar params combo.
+        """Stores accumulated specs for one group of compatible composed actuators.
 
-        Each element in input_indices/output_indices represents one actuator.
-        For single-input actuators: [[idx1], [idx2], ...] → flattened to 1D array
-        For multi-input actuators: [[idx1, idx2], [idx3, idx4], ...] → 2D array
+        Each element in ``indices`` is a single DOF index.  The entry key is
+        ``(controller_class, delay_steps is not None, clamping_key, ctrl_shared_key)``
+        where shared params (e.g. ``model_path``, lookup tables) must
+        be identical across all actuators in a group.  Delay step values
+        are per-DOF; the buffer is sized to ``max(delay_step_values) + 1``.
         """
 
-        input_indices: list[list[int]]  # Per-actuator input indices
-        output_indices: list[list[int]]  # Per-actuator output indices
-        args: list[dict[str, Any]]  # Per-actuator array params (scalar params in dict key)
+        controller_class: type  # Controller subclass (e.g. ControllerPD)
+        clamping_classes: tuple  # Tuple of Clamping subclass types (in order)
+        clamping_shared_kwargs: tuple  # Tuple of dicts: shared kwargs per clamping class
+        controller_shared_kwargs: dict  # Shared controller kwargs (e.g. model_path)
+        indices: list[int]  # Per-actuator DOF indices (joint_qd layout)
+        pos_indices: list[int]  # Per-actuator position indices (joint_q layout)
+        controller_args: list[dict[str, Any]]  # Per-actuator controller array params
+        delay_args: list[dict[str, Any]]  # Per-actuator delay params (empty if no delay)
+        clamping_args: list[list[dict[str, Any]]]  # Per-actuator per-clamping array params
 
     @dataclass
     class ShapeConfig:
@@ -245,6 +283,11 @@ class ModelBuilder:
         """Maximum dimension for sparse SDF grid (must be divisible by 8).
         If provided (and sdf_target_voxel_size is None), enables primitive SDF
         generation. Requires GPU since wp.Volume only supports CUDA."""
+        sdf_texture_format: str = "uint16"
+        """Subgrid texture storage format for the SDF. ``"uint16"``
+        (default) stores subgrid voxels as 16-bit normalized textures (half
+        the memory of ``"float32"``). ``"float32"`` stores full-precision
+        values. ``"uint8"`` uses 8-bit textures for minimum memory."""
         is_hydroelastic: bool = False
         """Whether the shape collides using SDF-based hydroelastics. For hydroelastic collisions, both participating shapes must have is_hydroelastic set to True. Defaults to False.
 
@@ -267,6 +310,7 @@ class ModelBuilder:
             target_voxel_size: float | None = None,
             is_hydroelastic: bool = False,
             kh: float = 1.0e10,
+            texture_format: str | None = None,
         ) -> None:
             """Enable SDF-based collision for this shape.
 
@@ -282,6 +326,9 @@ class ModelBuilder:
                 is_hydroelastic: Whether to use SDF-based hydroelastic contacts. Both shapes
                     in a pair must have this enabled.
                 kh: Contact stiffness coefficient for hydroelastic collisions.
+                texture_format: Subgrid texture storage format. ``"uint16"``
+                    (default) uses 16-bit normalized textures. ``"float32"``
+                    uses full-precision. ``"uint8"`` uses 8-bit textures.
 
             Raises:
                 ValueError: If both max_resolution and target_voxel_size are provided.
@@ -296,6 +343,8 @@ class ModelBuilder:
                 self.sdf_max_resolution = None
             self.is_hydroelastic = is_hydroelastic
             self.kh = kh
+            if texture_format is not None:
+                self.sdf_texture_format = texture_format
 
         def validate(self, shape_type: int | None = None) -> None:
             """Validate ShapeConfig parameters.
@@ -304,6 +353,11 @@ class ModelBuilder:
                 shape_type: Optional shape geometry type used for context-specific
                     validation.
             """
+            _valid_tex_fmts = ("float32", "uint16", "uint8")
+            if self.sdf_texture_format not in _valid_tex_fmts:
+                raise ValueError(
+                    f"Unknown sdf_texture_format {self.sdf_texture_format!r}. Expected one of {list(_valid_tex_fmts)}."
+                )
             if self.sdf_max_resolution is not None and self.sdf_target_voxel_size is not None:
                 raise ValueError("Set only one of sdf_max_resolution or sdf_target_voxel_size, not both.")
             if self.sdf_max_resolution is not None and self.sdf_max_resolution % 8 != 0:
@@ -483,7 +537,7 @@ class ModelBuilder:
             - A :class:`Model.AttributeFrequency` enum value for built-in frequencies (BODY, SHAPE, JOINT, etc.)
               Uses dict-based storage where keys are entity indices, allowing sparse assignment.
             - A string for custom frequencies using the full frequency key (e.g., ``"mujoco:pair"``).
-              Uses list-based storage for sequential data appended via :meth:`add_custom_values`. All attributes
+              Uses list-based storage for sequential data appended via :meth:`~newton.ModelBuilder.add_custom_values`. All attributes
               sharing the same custom frequency must have the same count, validated by
               :meth:`finalize <ModelBuilder.finalize>`."""
 
@@ -801,8 +855,7 @@ class ModelBuilder:
         self.default_tet_density = 1.0
         """Default density [kg/m^3] for tetrahedral soft bodies."""
 
-        self.default_body_armature = 0.0
-        """Default body armature value used when body armature is not provided."""
+        self._default_body_armature = 0.0
         # endregion
 
         # region compiler settings (similar to MuJoCo)
@@ -812,20 +865,22 @@ class ModelBuilder:
         ensuring physical validity (I1 + I2 >= I3 for principal moments). Default: True."""
 
         self.bound_mass: float | None = None
-        """Minimum allowed mass value for rigid bodies. If set, any body mass below this value will be
-        clamped to this minimum. Set to None to disable mass clamping. Default: None."""
+        """Minimum allowed mass value for rigid bodies [kg]. If set, any body mass below this
+        value will be clamped to this minimum. Set to None to disable mass clamping.
+        Default: None."""
 
         self.bound_inertia: float | None = None
-        """Minimum allowed eigenvalue for rigid body inertia tensors. If set, ensures all principal
-        moments of inertia are at least this value. Set to None to disable inertia eigenvalue
-        clamping. Default: None."""
+        """Minimum allowed eigenvalue for rigid body inertia tensors [kg*m^2]. If set, ensures
+        all principal moments of inertia are at least this value. Set to None to disable inertia
+        eigenvalue clamping. Default: None."""
 
         self.validate_inertia_detailed: bool = False
         """Whether to use detailed (slower) inertia validation that provides per-body warnings.
-        When False, uses a fast GPU kernel that reports only the total number of corrected bodies
-        and directly assigns the corrected arrays to the Model (ModelBuilder state is not updated).
-        When True, uses a CPU implementation that reports specific issues for each body and updates
-        the ModelBuilder's internal state.
+        When False, uses a fast GPU kernel that reports only the total number of corrected bodies.
+        When True, uses a CPU implementation that reports specific issues for each body.
+        Both modes produce semantically identical corrected values on the returned
+        :class:`Model`. Neither mode modifies the builder's internal state — corrected
+        values live only on the Model.
         Default: False."""
 
         # endregion
@@ -863,6 +918,8 @@ class ModelBuilder:
         """Shape scales accumulated for :attr:`Model.shape_scale`."""
         self.shape_source: list[Any] = []
         """Source geometry objects accumulated for :attr:`Model.shape_source`."""
+        self.shape_color: list[Vec3] = []
+        """Resolved display colors accumulated for :attr:`Model.shape_color`."""
         self.shape_is_solid: list[bool] = []
         """Solid-vs-hollow flags accumulated for :attr:`Model.shape_is_solid`."""
         self.shape_margin: list[float] = []
@@ -900,9 +957,12 @@ class ModelBuilder:
         """Per-shape target SDF voxel sizes retained until :meth:`finalize <ModelBuilder.finalize>`."""
         self.shape_sdf_max_resolution: list[int | None] = []
         """Per-shape SDF maximum resolutions retained until :meth:`finalize <ModelBuilder.finalize>`."""
+        self.shape_sdf_texture_format: list[str] = []
+        """Per-shape SDF texture format retained until :meth:`finalize <ModelBuilder.finalize>`."""
 
-        # Mesh SDF storage (volumes kept for reference counting, SDFData array created at finalize)
+        # Mesh SDF storage (texture SDF arrays created at finalize)
 
+        # filtering to ignore certain collision pairs
         self.shape_collision_filter_pairs: list[tuple[int, int]] = []
         """Shape collision filter pairs accumulated for :attr:`Model.shape_collision_filter_pairs`."""
 
@@ -1101,7 +1161,7 @@ class ModelBuilder:
 
         self.rigid_gap: float = 0.1
         """Default rigid contact gap [m] applied when adding a shape whose
-        :attr:`ShapeConfig.gap` is ``None``. The resolved per-shape values are later
+        ``ModelBuilder.ShapeConfig.gap`` is ``None``. The resolved per-shape values are later
         propagated to :attr:`Model.shape_gap`."""
 
         self.num_rigid_contacts_per_world: int | None = None
@@ -1180,9 +1240,9 @@ class ModelBuilder:
         """Running counts for custom string frequencies used to size custom attribute arrays."""
 
         # Actuator entries (accumulated during add_actuator calls)
-        # Key is (actuator_class, scalar_params_tuple) to separate instances with different scalar params
-        self.actuator_entries: dict[tuple[type[Actuator], tuple[Any, ...]], ModelBuilder.ActuatorEntry] = {}
-        """Actuator entry groups accumulated from :meth:`add_actuator`, keyed by class and scalar parameters."""
+        # Key is (controller_class, delay is not None, clamping_key, ctrl_shared_key) to group compatible actuators
+        self.actuator_entries: dict[tuple, ModelBuilder.ActuatorEntry] = {}
+        """Actuator entry groups accumulated from :meth:`add_actuator`, keyed by controller class and shared params."""
 
     def add_shape_collision_filter_pair(self, shape_a: int, shape_b: int) -> None:
         """Add a collision filter pair in canonical order.
@@ -1637,75 +1697,228 @@ class ModelBuilder:
                     f"Custom attribute '{attr_key}' has unsupported frequency {custom_attr.frequency} for joints"
                 )
 
-    def add_actuator(
+    # Maps legacy newton_actuators class names to (newton.actuators controller class name, has_delay).
+    _LEGACY_ACTUATOR_CLASS_MAP: ClassVar[dict[str, tuple[str, bool]]] = {
+        "ActuatorPD": ("ControllerPD", False),
+        "ActuatorPID": ("ControllerPID", False),
+        "ActuatorDelayedPD": ("ControllerPD", True),
+    }
+
+    def _add_actuator_legacy(
         self,
-        actuator_class: type[Actuator],
-        input_indices: list[int],
-        output_indices: list[int] | None = None,
+        actuator_class: type,
+        input_indices: list[int] | None,
+        output_indices: list[int] | None,
         **kwargs: Any,
     ) -> None:
-        """Add an external actuator, independent of any ``UsdPhysics`` joint drives.
+        """Translate a legacy ``newton_actuators``-style call to the new API.
 
-        External actuators (e.g. :class:`newton_actuators.ActuatorPD`) apply
-        forces computed outside the physics engine. Multiple calls with the same
-        *actuator_class* and identical scalar parameters are accumulated into one
-        entry; the actuator instance is created during :meth:`finalize <ModelBuilder.finalize>`.
+        Mirrors the old ``main``-branch signature::
+
+            add_actuator(actuator_class, input_indices, output_indices=None, **kwargs)
+
+        *input_indices* / *output_indices* may arrive either as explicit
+        arguments or inside *kwargs* (keyword style).  All old per-DOF
+        params (``kp``, ``kd``, ``delay``, ``max_effort``, ``gear``, …)
+        are expected in *kwargs*.
+        """
+        if input_indices is None:
+            raise TypeError("Legacy add_actuator() requires 'input_indices'")
+
+        # --- Map old class name → new controller class ---
+        class_name = actuator_class.__name__
+        mapping = self._LEGACY_ACTUATOR_CLASS_MAP.get(class_name)
+        if mapping is None:
+            raise TypeError(
+                f"Unknown legacy actuator class '{class_name}'. "
+                f"Supported: {', '.join(self._LEGACY_ACTUATOR_CLASS_MAP)}."
+            )
+
+        ctrl_name, class_has_delay = mapping
+        controller_class: type = {"ControllerPD": ControllerPD, "ControllerPID": ControllerPID}[ctrl_name]
+
+        delay_val: int | None = kwargs.pop("delay_steps", kwargs.pop("delay", None))
+        if class_has_delay and delay_val is None:
+            raise ValueError(f"{class_name} requires a 'delay_steps' argument")
+
+        max_effort_val = kwargs.pop("max_force", None)
+        gear_val = kwargs.pop("gear", None)
+
+        if gear_val is not None and gear_val != 1.0:
+            warnings.warn(
+                f"'gear={gear_val}' is not supported in the new actuator API and will be "
+                f"ignored. Fold the gear ratio into kp/kd/const_effort manually.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+        clamping: list[tuple[type, dict[str, Any]]] | None = None
+        if max_effort_val is not None and max_effort_val != math.inf:
+            clamping = [(ClampingMaxEffort, {"max_effort": max_effort_val})]
+
+        if output_indices is not None and output_indices != input_indices:
+            warnings.warn(
+                "'output_indices' is not supported in the new actuator API and will be "
+                "ignored. Forces are written to the same DOF index by default.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+        for dof_idx in input_indices:
+            self.add_actuator(
+                controller_class,
+                index=dof_idx,
+                clamping=clamping,
+                delay_steps=delay_val,
+                **kwargs,
+            )
+
+    def add_actuator(
+        self,
+        controller_class: type[Controller] | None = None,
+        index: int | None = None,
+        clamping: list[tuple[type[Clamping], dict[str, Any]]] | None = None,
+        delay_steps: int | None = None,
+        pos_index: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        """Add an external actuator for a single DOF.
+
+        External actuators apply forces computed outside the physics engine.
+        Multiple calls with the same *controller_class*, *clamping*
+        types, and identical shared parameters are accumulated into one
+        :class:`~newton.actuators.Actuator` instance during
+        :meth:`finalize <ModelBuilder.finalize>`.  Different delay
+        values are supported within the same group; the buffer is
+        sized to ``max(delay_step_values)``.
+
+        .. deprecated::
+            The legacy ``newton_actuators`` signature is still accepted::
+
+                add_actuator(ActuatorPD, input_indices=[dof], kp=50.0)
+                add_actuator(ActuatorPD, [dof], kp=50.0)
+                add_actuator(actuator_class=ActuatorPD, input_indices=[dof], kp=50.0)
+
+            It will be removed in a future release.  Use the new per-DOF
+            signature instead.
 
         Args:
-            actuator_class: The actuator class (must derive from
-                :class:`newton_actuators.Actuator`).
-            input_indices: DOF indices this actuator reads from. Length 1 for single-input,
-                length > 1 for multi-input actuators.
-            output_indices: DOF indices for writing output. Defaults to *input_indices*.
-            **kwargs: Actuator parameters (e.g., ``kp``, ``kd``, ``max_force``).
+            controller_class: Controller class (e.g. :class:`~newton.actuators.ControllerPD`).
+                The deprecated keyword ``actuator_class`` is also accepted.
+            index: DOF index into ``joint_qd``-shaped arrays (velocities,
+                velocity targets, feedforward, forces).
+            clamping: Optional list of ``(ClampingClass, kwargs)`` tuples applied
+                post-controller. E.g. ``[(ClampingMaxEffort, {'max_effort': 50.0})]``.
+            delay_steps: Optional number of timesteps [timesteps] to delay inputs.
+            pos_index: DOF index into ``joint_q``-shaped arrays (positions,
+                position targets). Defaults to *index*. Differs from
+                *index* for floating-base or ball-joint articulations
+                where ``joint_q`` and ``joint_qd`` have different layouts.
+            **kwargs: Per-DOF controller parameters (e.g. ``kp``, ``kd``).
         """
-        if output_indices is None:
-            output_indices = input_indices.copy()
+        legacy_cls = kwargs.pop("actuator_class", None)
+        if (
+            legacy_cls is None
+            and _LegacyActuator is not None
+            and isinstance(controller_class, type)
+            and issubclass(controller_class, _LegacyActuator)
+        ):
+            legacy_cls = controller_class
 
-        resolved = actuator_class.resolve_arguments(kwargs)
+        if legacy_cls is not None:
+            warnings.warn(
+                "add_actuator() with a newton_actuators class is deprecated. "
+                "Use newton.actuators controller classes instead "
+                "(e.g. ControllerPD, ControllerPID).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            input_indices = kwargs.pop("input_indices", index)
+            output_indices = kwargs.pop("output_indices", clamping)
+            if delay_steps is not None:
+                kwargs["delay_steps"] = delay_steps
+            self._add_actuator_legacy(legacy_cls, input_indices, output_indices, **kwargs)
+            return
 
-        # Extract scalar params to form the entry key
-        scalar_param_names = getattr(actuator_class, "SCALAR_PARAMS", set())
-        scalar_key = tuple(sorted((k, resolved[k]) for k in scalar_param_names if k in resolved))
+        if controller_class is None:
+            raise TypeError("add_actuator() requires 'controller_class'")
 
-        # Key is (class, scalar_params) so different scalar values create separate entries
-        entry_key = (actuator_class, scalar_key)
+        if index is None:
+            raise TypeError("add_actuator() missing required argument: 'index'")
+
+        clamping = clamping or []
+
+        # --- Resolve controller kwargs and separate shared from per-DOF ---
+        resolved_ctrl = controller_class.resolve_arguments(kwargs)
+        unrecognized = set(kwargs) - set(resolved_ctrl)
+        if unrecognized:
+            warnings.warn(
+                f"add_actuator: {controller_class.__name__} ignoring "
+                f"unrecognized parameter(s): {', '.join(sorted(unrecognized))}",
+                stacklevel=2,
+            )
+        ctrl_shared_names = getattr(controller_class, "SHARED_PARAMS", set())
+        ctrl_shared = {k: resolved_ctrl[k] for k in ctrl_shared_names if k in resolved_ctrl}
+        ctrl_array_params = {k: v for k, v in resolved_ctrl.items() if k not in ctrl_shared_names}
+
+        # --- Resolve per-clamping kwargs and separate shared from per-DOF ---
+        clamping_classes = tuple(cc for cc, _ in clamping)
+        clamping_shared_list = []
+        clamping_array_params_list = []
+        for comp_class, comp_kwargs in clamping:
+            resolved_comp = comp_class.resolve_arguments(comp_kwargs)
+            comp_shared_names = getattr(comp_class, "SHARED_PARAMS", set())
+            comp_shared = {k: resolved_comp[k] for k in comp_shared_names if k in resolved_comp}
+            comp_array = {k: v for k, v in resolved_comp.items() if k not in comp_shared_names}
+            clamping_shared_list.append(comp_shared)
+            clamping_array_params_list.append(comp_array)
+
+        clamping_shared_kwargs = tuple(clamping_shared_list)
+
+        # --- Build entry key: identifies a group of compatible actuators ---
+        # Groups differ when controller class, presence of delay, clamping
+        # types/shared-params, or controller shared params differ.
+        # Delay values are per-DOF; the buffer is sized to max(delays).
+        def _make_hashable(v: Any) -> Any:
+            if isinstance(v, list):
+                return tuple(v)
+            return v
+
+        ctrl_shared_key = tuple(sorted((k, _make_hashable(v)) for k, v in ctrl_shared.items()))
+        clamping_key = tuple(
+            (cc, tuple(sorted((k, _make_hashable(v)) for k, v in shared.items())))
+            for cc, shared in zip(clamping_classes, clamping_shared_list, strict=True)
+        )
+        entry_key = (controller_class, delay_steps is not None, clamping_key, ctrl_shared_key)
+
         entry = self.actuator_entries.setdefault(
             entry_key,
-            ModelBuilder.ActuatorEntry(input_indices=[], output_indices=[], args=[]),
+            ModelBuilder.ActuatorEntry(
+                controller_class=controller_class,
+                clamping_classes=clamping_classes,
+                clamping_shared_kwargs=clamping_shared_kwargs,
+                controller_shared_kwargs=ctrl_shared,
+                indices=[],
+                pos_indices=[],
+                controller_args=[],
+                delay_args=[],
+                clamping_args=[],
+            ),
         )
 
-        # Filter out scalar params from args (they're already in the key)
-        array_params = {k: v for k, v in resolved.items() if k not in scalar_param_names}
-
-        # Validate dimension consistency before appending
-        if entry.input_indices:
-            expected_input_dim = len(entry.input_indices[0])
-            if len(input_indices) != expected_input_dim:
-                raise ValueError(
-                    f"Input indices dimension mismatch for {actuator_class.__name__}: "
-                    f"expected {expected_input_dim}, got {len(input_indices)}. "
-                    f"All actuators of the same type must have the same number of inputs."
-                )
-        if entry.output_indices:
-            expected_output_dim = len(entry.output_indices[0])
-            if len(output_indices) != expected_output_dim:
-                raise ValueError(
-                    f"Output indices dimension mismatch for {actuator_class.__name__}: "
-                    f"expected {expected_output_dim}, got {len(output_indices)}. "
-                    f"All actuators of the same type must have the same number of outputs."
-                )
-
-        # Each call adds one actuator with its input/output indices
-        entry.input_indices.append(input_indices)
-        entry.output_indices.append(output_indices)
-        entry.args.append(array_params)
+        entry.indices.append(index)
+        entry.pos_indices.append(pos_index if pos_index is not None else index)
+        entry.controller_args.append(ctrl_array_params)
+        if delay_steps is not None:
+            entry.delay_args.append({"delay_steps": delay_steps})
+        entry.clamping_args.append(clamping_array_params_list)
 
     def _stack_args_to_arrays(
         self,
         args_list: list[dict[str, Any]],
         device: Devicelike | None = None,
         requires_grad: bool = False,
+        default_dtype: type = wp.float32,
     ) -> dict[str, wp.array]:
         """Convert list of per-index arg dicts into dict of warp arrays.
 
@@ -1713,6 +1926,11 @@ class ModelBuilder:
             args_list: List of dicts, one per index. Each dict has same keys.
             device: Device for warp arrays.
             requires_grad: Whether the arrays require gradients.
+            default_dtype: Warp dtype used for columns where all values are
+                numeric.  Defaults to ``wp.float32`` so that Python ``int``
+                gains (e.g. ``kp=100``) produce float arrays as controllers
+                expect.  Pass ``wp.int32`` when integer semantics are needed
+                (e.g. delay steps).
 
         Returns:
             Mapping from parameter names to warp arrays.
@@ -1723,44 +1941,35 @@ class ModelBuilder:
         result = {}
         for key in args_list[0].keys():
             values = [args[key] for args in args_list]
-            result[key] = wp.array(values, dtype=wp.float32, device=device, requires_grad=requires_grad)
+            for v in values:
+                if not isinstance(v, int | float):
+                    raise TypeError(
+                        f"add_actuator expects scalar per-DOF params, but "
+                        f"parameter '{key}' got {type(v).__name__}; pass one "
+                        f"scalar per add_actuator call"
+                    )
+            if default_dtype == wp.int32 and all(isinstance(v, int) for v in values):
+                result[key] = wp.array(values, dtype=wp.int32, device=device)
+            else:
+                rg = requires_grad and default_dtype != wp.int32
+                result[key] = wp.array(values, dtype=wp.float32, device=device, requires_grad=rg)
 
         return result
 
     @staticmethod
-    def _build_index_array(indices: list[list[int]], device: Devicelike) -> wp.array:
-        """Build a warp array from nested index lists.
-
-        If all inner lists have length 1, creates a 1D array (N,).
-        Otherwise, creates a 2D array (N, M) where M is the inner list length.
+    def _build_index_array(indices: list[int], device: Devicelike) -> wp.array:
+        """Build a 1-D warp index array from a flat list of DOF indices.
 
         Args:
-            indices: Nested list of indices, one inner list per actuator.
+            indices: Flat list of DOF indices, one per actuator.
             device: Device for the warp array.
 
         Returns:
-            Array with shape ``(N,)`` or ``(N, M)``.
-
-        Raises:
-            ValueError: If inner lists have inconsistent lengths (for 2D case).
+            Array with shape ``(N,)``.
         """
         if not indices:
             return wp.array([], dtype=wp.uint32, device=device)
-
-        inner_lengths = [len(idx_list) for idx_list in indices]
-        max_len = max(inner_lengths)
-
-        if max_len == 1:
-            # All single-input: flatten to 1D
-            flat = [idx_list[0] for idx_list in indices]
-            return wp.array(flat, dtype=wp.uint32, device=device)
-        else:
-            # Multi-input: create 2D array
-            if not all(length == max_len for length in inner_lengths):
-                raise ValueError(
-                    f"All actuators must have the same number of inputs for 2D indexing. Got lengths: {inner_lengths}"
-                )
-            return wp.array(indices, dtype=wp.uint32, device=device)
+        return wp.array(indices, dtype=wp.uint32, device=device)
 
     @property
     def default_site_cfg(self) -> ShapeConfig:
@@ -1911,6 +2120,13 @@ class ModelBuilder:
             For visual separation of worlds, it is recommended to use the viewer's
             `set_world_offsets()` method instead of physical spacing. This improves numerical
             stability by keeping all worlds at the origin in the physics simulation.
+
+        .. important::
+            To approximate mesh shapes, call
+            :meth:`~newton.ModelBuilder.approximate_meshes` on ``builder`` before
+            passing it here. Replication copies mesh references, so approximating
+            first yields a single simplified copy shared across all worlds;
+            approximating afterwards allocates one copy per replicated shape.
 
         Args:
             builder: The builder to replicate. All entities from this builder will be copied.
@@ -2206,7 +2422,7 @@ class ModelBuilder:
         force_position_velocity_actuation: bool = False,
         override_root_xform: bool = False,
     ) -> dict[str, Any]:
-        """Parses a Universal Scene Description (USD) stage containing UsdPhysics schema definitions for rigid-body articulations and adds the bodies, shapes and joints to the given ModelBuilder.
+        """Parses a Universal Scene Description (USD) stage and adds rigid bodies, soft bodies, shapes, and joints to the given ModelBuilder.
 
         The USD description has to be either a path (file name or URL), or an existing USD stage instance that implements the `Stage <https://openusd.org/dev/api/class_usd_stage.html>`_ interface.
 
@@ -2302,12 +2518,10 @@ class ModelBuilder:
             load_sites: If True, sites (prims with MjcSiteAPI) are loaded as non-colliding reference points. If False, sites are ignored. Default is True.
             load_visual_shapes: If True, non-physics visual geometry is loaded. If False, visual-only shapes are ignored (sites are still controlled by ``load_sites``). Default is True.
             hide_collision_shapes: If True, collision shapes on bodies that already
-                have visual-only geometry are hidden. Collision shapes on bodies
-                without visual-only geometry remain visible as a rendering fallback.
-                Mesh colliders with authored PBR material data (texture,
-                roughness, or metallic) also remain visible so collision-only
-                render meshes are not lost.
-                Default is False.
+                have visual-only geometry are hidden unconditionally, regardless of
+                whether the collider has authored PBR material data. Collision
+                shapes on bodies without visual-only geometry remain visible as a
+                rendering fallback. Default is False.
             force_show_colliders: If True, collision shapes get the VISIBLE flag
                 regardless of whether visual shapes exist on the same body. Note that
                 ``hide_collision_shapes=True`` still suppresses the VISIBLE flag for
@@ -2320,7 +2534,7 @@ class ModelBuilder:
                 (e.g., ``physxScene:*``, ``physxRigidBody:*``, ``physxSDFMeshCollision:*``), and ``mjc:*`` that
                 are authored in the USD but not strictly required to build the simulation. This is useful for
                 inspection, experimentation, or custom pipelines that read these values via
-                ``result["schema_attrs"]`` returned from :func:`parse_usd`.
+                ``result["schema_attrs"]`` returned from ``parse_usd()``.
 
                 .. note::
                     Using the ``schema_resolvers`` argument is an experimental feature that may be removed or changed significantly in the future.
@@ -3044,6 +3258,7 @@ class ModelBuilder:
             "shape_type",
             "shape_scale",
             "shape_source",
+            "shape_color",
             "shape_is_solid",
             "shape_margin",
             "shape_material_ke",
@@ -3060,6 +3275,7 @@ class ModelBuilder:
             "shape_sdf_narrow_band_range",
             "shape_sdf_max_resolution",
             "shape_sdf_target_voxel_size",
+            "shape_sdf_texture_format",
             "particle_qd",
             "particle_mass",
             "particle_radius",
@@ -3229,14 +3445,25 @@ class ModelBuilder:
         for entry_key, sub_entry in builder.actuator_entries.items():
             entry = self.actuator_entries.setdefault(
                 entry_key,
-                ModelBuilder.ActuatorEntry(input_indices=[], output_indices=[], args=[]),
+                ModelBuilder.ActuatorEntry(
+                    controller_class=sub_entry.controller_class,
+                    clamping_classes=sub_entry.clamping_classes,
+                    clamping_shared_kwargs=sub_entry.clamping_shared_kwargs,
+                    controller_shared_kwargs=sub_entry.controller_shared_kwargs,
+                    indices=[],
+                    pos_indices=[],
+                    controller_args=[],
+                    delay_args=[],
+                    clamping_args=[],
+                ),
             )
-            # Offset indices by start_joint_dof_idx (each actuator's indices are a list)
-            for idx_list in sub_entry.input_indices:
-                entry.input_indices.append([idx + start_joint_dof_idx for idx in idx_list])
-            for idx_list in sub_entry.output_indices:
-                entry.output_indices.append([idx + start_joint_dof_idx for idx in idx_list])
-            entry.args.extend(sub_entry.args)
+            for idx in sub_entry.indices:
+                entry.indices.append(idx + start_joint_dof_idx)
+            for idx in sub_entry.pos_indices:
+                entry.pos_indices.append(idx + start_joint_coord_idx)
+            entry.controller_args.extend(sub_entry.controller_args)
+            entry.delay_args.extend(sub_entry.delay_args)
+            entry.clamping_args.extend(sub_entry.clamping_args)
 
     @staticmethod
     def _coerce_mat33(value: Any) -> wp.mat33:
@@ -3263,6 +3490,53 @@ class ModelBuilder:
 
         return wp.mat33(*value)
 
+    @staticmethod
+    def _external_warning_stacklevel() -> int:
+        frame = inspect.currentframe()
+        if frame is None:
+            return 2
+
+        frame = frame.f_back
+        stacklevel = 1
+        try:
+            while frame is not None and frame.f_code.co_filename == __file__:
+                frame = frame.f_back
+                stacklevel += 1
+            return stacklevel
+        finally:
+            del frame
+
+    @classmethod
+    def _warn_body_armature_arg_deprecated(cls) -> None:
+        warnings.warn(
+            cls._BODY_ARMATURE_ARG_DEPRECATION_MESSAGE,
+            DeprecationWarning,
+            stacklevel=cls._external_warning_stacklevel(),
+        )
+
+    @classmethod
+    def _warn_default_body_armature_deprecated(cls) -> None:
+        warnings.warn(
+            cls._DEFAULT_BODY_ARMATURE_DEPRECATION_MESSAGE,
+            DeprecationWarning,
+            stacklevel=cls._external_warning_stacklevel(),
+        )
+
+    @property
+    def default_body_armature(self) -> float:
+        """Deprecated default body armature.
+
+        .. deprecated:: 1.1
+            Add any isotropic artificial inertia directly to ``inertia`` instead.
+        """
+        self._warn_default_body_armature_deprecated()
+        return self._default_body_armature
+
+    @default_body_armature.setter
+    def default_body_armature(self, value: float) -> None:
+        self._warn_default_body_armature_deprecated()
+        self._default_body_armature = value
+
     def add_link(
         self,
         xform: Transform | None = None,
@@ -3283,9 +3557,15 @@ class ModelBuilder:
 
         After calling this method and one of the joint methods, ensure that an articulation is created using :meth:`add_articulation`.
 
+        .. deprecated:: 1.1
+            The ``armature`` parameter is deprecated. Add any isotropic artificial
+            inertia directly to ``inertia`` instead.
+
         Args:
             xform: The location of the body in the world frame.
-            armature: Artificial inertia added to the body. If None, the default value from :attr:`default_body_armature` is used.
+            armature: Deprecated. Artificial inertia added to the body. If ``None``,
+                the deprecated default value from :attr:`default_body_armature` is used.
+                Add any isotropic artificial inertia directly to ``inertia`` instead.
             com: The center of mass of the body w.r.t its origin. If None, the center of mass is assumed to be at the origin.
             inertia: The 3x3 inertia tensor of the body (specified relative to the center of mass). If None, the inertia tensor is assumed to be zero.
             mass: Mass of the body.
@@ -3301,7 +3581,8 @@ class ModelBuilder:
             The index of the body in the model.
 
         """
-
+        if armature is not None and armature != 0.0:
+            self._warn_body_armature_arg_deprecated()
         if xform is None:
             xform = wp.transform()
         else:
@@ -3319,7 +3600,7 @@ class ModelBuilder:
 
         # body data
         if armature is None:
-            armature = self.default_body_armature
+            armature = self._default_body_armature
         inertia = inertia + wp.mat33(np.eye(3, dtype=np.float32)) * armature
         self.body_inertia.append(inertia)
         self.body_mass.append(mass)
@@ -3368,7 +3649,7 @@ class ModelBuilder:
         """Adds a stand-alone free-floating rigid body to the model.
 
         This is a convenience method that creates a single-body articulation with a free joint,
-        allowing the body to move freely in 6 degrees of freedom. Internally, this method calls:
+        allowing the body to move freely in 6 degrees of freedom. This is equivalent to calling:
 
         1. :meth:`add_link` to create the body
         2. :meth:`add_joint_free` to add a free joint connecting the body to the world
@@ -3377,9 +3658,15 @@ class ModelBuilder:
         For creating articulations with multiple linked bodies, use :meth:`add_link`,
         the appropriate joint methods, and :meth:`add_articulation` directly.
 
+        .. deprecated:: 1.1
+            The ``armature`` parameter is deprecated. Add any isotropic artificial
+            inertia directly to ``inertia`` instead.
+
         Args:
             xform: The location of the body in the world frame.
-            armature: Artificial inertia added to the body. If None, the default value from :attr:`default_body_armature` is used.
+            armature: Deprecated. Artificial inertia added to the body. If ``None``,
+                the deprecated default value from :attr:`default_body_armature` is used.
+                Add any isotropic artificial inertia directly to ``inertia`` instead.
             com: The center of mass of the body w.r.t its origin. If None, the center of mass is assumed to be at the origin.
             inertia: The 3x3 inertia tensor of the body (specified relative to the center of mass). If None, the inertia tensor is assumed to be zero.
             mass: Mass of the body.
@@ -3395,7 +3682,6 @@ class ModelBuilder:
             The index of the body in the model.
 
         """
-        # Create the link
         body_id = self.add_link(
             xform=xform,
             armature=armature,
@@ -3403,9 +3689,9 @@ class ModelBuilder:
             inertia=inertia,
             mass=mass,
             label=label,
-            custom_attributes=custom_attributes,
             lock_inertia=lock_inertia,
             is_kinematic=is_kinematic,
+            custom_attributes=custom_attributes,
         )
 
         # Add a free joint to make it float
@@ -3632,14 +3918,14 @@ class ModelBuilder:
             target_vel: The target velocity of the joint.
             target_ke: The stiffness of the joint target.
             target_kd: The damping of the joint target.
-            limit_lower: The lower limit of the joint. If None, the default value from :attr:`default_joint_limit_lower` is used.
-            limit_upper: The upper limit of the joint. If None, the default value from :attr:`default_joint_limit_upper` is used.
-            limit_ke: The stiffness of the joint limit. If None, the default value from :attr:`default_joint_limit_ke` is used.
-            limit_kd: The damping of the joint limit. If None, the default value from :attr:`default_joint_limit_kd` is used.
-            armature: Artificial inertia added around the joint axis. If None, the default value from :attr:`default_joint_armature` is used.
-            effort_limit: Maximum effort (force/torque) the joint axis can exert. If None, the default value from :attr:`default_joint_cfg.effort_limit` is used.
-            velocity_limit: Maximum velocity the joint axis can achieve. If None, the default value from :attr:`default_joint_cfg.velocity_limit` is used.
-            friction: Friction coefficient for the joint axis. If None, the default value from :attr:`default_joint_cfg.friction` is used.
+            limit_lower: The lower limit of the joint. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_lower`` is used.
+            limit_upper: The upper limit of the joint. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_upper`` is used.
+            limit_ke: The stiffness of the joint limit. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_ke`` is used.
+            limit_kd: The damping of the joint limit. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_kd`` is used.
+            armature: Artificial inertia added around the joint axis. If None, the default value from ``ModelBuilder.default_joint_cfg.armature`` is used.
+            effort_limit: Maximum effort (force/torque) the joint axis can exert. If None, the default value from ``ModelBuilder.default_joint_cfg.effort_limit`` is used.
+            velocity_limit: Maximum velocity the joint axis can achieve. If None, the default value from ``ModelBuilder.default_joint_cfg.velocity_limit`` is used.
+            friction: Friction coefficient for the joint axis. If None, the default value from ``ModelBuilder.default_joint_cfg.friction`` is used.
             label: The label of the joint.
             collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies.
             enabled: Whether the joint is enabled.
@@ -3724,14 +4010,14 @@ class ModelBuilder:
             target_vel: The target velocity of the joint.
             target_ke: The stiffness of the joint target.
             target_kd: The damping of the joint target.
-            limit_lower: The lower limit of the joint. If None, the default value from :attr:`default_joint_limit_lower` is used.
-            limit_upper: The upper limit of the joint. If None, the default value from :attr:`default_joint_limit_upper` is used.
-            limit_ke: The stiffness of the joint limit. If None, the default value from :attr:`default_joint_limit_ke` is used.
-            limit_kd: The damping of the joint limit. If None, the default value from :attr:`default_joint_limit_kd` is used.
-            armature: Artificial inertia added around the joint axis. If None, the default value from :attr:`default_joint_armature` is used.
-            effort_limit: Maximum effort (force) the joint axis can exert. If None, the default value from :attr:`default_joint_cfg.effort_limit` is used.
-            velocity_limit: Maximum velocity the joint axis can achieve. If None, the default value from :attr:`default_joint_cfg.velocity_limit` is used.
-            friction: Friction coefficient for the joint axis. If None, the default value from :attr:`default_joint_cfg.friction` is used.
+            limit_lower: The lower limit of the joint. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_lower`` is used.
+            limit_upper: The upper limit of the joint. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_upper`` is used.
+            limit_ke: The stiffness of the joint limit. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_ke`` is used.
+            limit_kd: The damping of the joint limit. If None, the default value from ``ModelBuilder.default_joint_cfg.limit_kd`` is used.
+            armature: Artificial inertia added around the joint axis. If None, the default value from ``ModelBuilder.default_joint_cfg.armature`` is used.
+            effort_limit: Maximum effort (force) the joint axis can exert. If None, the default value from ``ModelBuilder.default_joint_cfg.effort_limit`` is used.
+            velocity_limit: Maximum velocity the joint axis can achieve. If None, the default value from ``ModelBuilder.default_joint_cfg.velocity_limit`` is used.
+            friction: Friction coefficient for the joint axis. If None, the default value from ``ModelBuilder.default_joint_cfg.friction`` is used.
             label: The label of the joint.
             collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies.
             enabled: Whether the joint is enabled.
@@ -3797,8 +4083,8 @@ class ModelBuilder:
             child: The index of the child body.
             parent_xform: The transform from the parent body frame to the joint parent anchor frame.
             child_xform: The transform from the child body frame to the joint child anchor frame.
-            armature: Artificial inertia added around the joint axes. If None, the default value from :attr:`default_joint_armature` is used.
-            friction: Friction coefficient for the joint axes. If None, the default value from :attr:`default_joint_cfg.friction` is used.
+            armature: Artificial inertia added around the joint axes. If None, the default value from ``ModelBuilder.default_joint_cfg.armature`` is used.
+            friction: Friction coefficient for the joint axes. If None, the default value from ``ModelBuilder.default_joint_cfg.friction`` is used.
             label: The label of the joint.
             collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies.
             enabled: Whether the joint is enabled.
@@ -4034,7 +4320,7 @@ class ModelBuilder:
             label: The label of the joint.
             parent_xform: The transform from the parent body frame to the joint parent anchor frame.
             child_xform: The transform from the child body frame to the joint child anchor frame.
-            armature: Artificial inertia added around the joint axes. If None, the default value from :attr:`default_joint_armature` is used.
+            armature: Artificial inertia added around the joint axes. If None, the default value from ``ModelBuilder.default_joint_cfg.armature`` is used.
             collision_filter_parent: Whether to filter collisions between shapes of the parent and child bodies.
             enabled: Whether the joint is enabled.
             custom_attributes: Dictionary of custom attribute values for JOINT, JOINT_DOF, or JOINT_COORD frequency attributes.
@@ -4097,7 +4383,7 @@ class ModelBuilder:
                 translation is the attachment point.
             child_xform: The transform from the child body frame to the joint child anchor frame; its
                 translation is the attachment point.
-            stretch_stiffness: Cable stretch stiffness (stored as ``target_ke``) [N/m]. If None, defaults to 1.0e9.
+            stretch_stiffness: Cable stretch stiffness (stored as ``target_ke``) [N/m]. If None, defaults to 1.0e5.
             stretch_damping: Cable stretch damping (stored as ``target_kd``). In :class:`newton.solvers.SolverVBD`
                 this is a dimensionless (Rayleigh-style) coefficient. If None,
                 defaults to 0.0.
@@ -4117,7 +4403,7 @@ class ModelBuilder:
 
         """
         # Linear DOF (stretch)
-        se_ke = 1.0e9 if stretch_stiffness is None else stretch_stiffness
+        se_ke = 1.0e5 if stretch_stiffness is None else stretch_stiffness
         se_kd = 0.0 if stretch_damping is None else stretch_damping
         ax_lin = ModelBuilder.JointDofConfig(target_ke=se_ke, target_kd=se_kd)
 
@@ -5080,13 +5366,15 @@ class ModelBuilder:
 
     def add_shape(
         self,
+        *,
         body: int,
         type: int,
         xform: Transform | None = None,
         cfg: ShapeConfig | None = None,
         scale: Vec3 | None = None,
-        src: Mesh | Any | None = None,
+        src: Mesh | Gaussian | Heightfield | Any | None = None,
         is_static: bool = False,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5102,6 +5390,7 @@ class ModelBuilder:
             scale: The scale of the geometry. The interpretation depends on the shape type. Defaults to `(1.0, 1.0, 1.0)` if `None`.
             src: The source geometry data, e.g., a :class:`Mesh` object for `GeoType.MESH`. Defaults to `None`.
             is_static: If `True`, the shape will have zero mass, and its density property in `cfg` will be effectively ignored for mass calculation. Typically used for fixed, non-movable collision geometry. Defaults to `False`.
+            color: Optional display RGB color with values in [0, 1]. If `None`, mesh-backed shapes fall back to :attr:`~newton.Mesh.color`; otherwise the per-shape palette sequence is used.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated (e.g., "shape_N"). Defaults to `None`.
             custom_attributes: Dictionary of custom attribute names to values.
 
@@ -5120,6 +5409,7 @@ class ModelBuilder:
                 cfg.sdf_max_resolution is not None
                 or cfg.sdf_target_voxel_size is not None
                 or cfg.sdf_narrow_band_range != (-0.1, 0.1)
+                or cfg.sdf_texture_format != "uint16"
             ):
                 raise ValueError(
                     "Mesh shapes do not use cfg.sdf_* for SDF generation. "
@@ -5177,10 +5467,18 @@ class ModelBuilder:
             shape_flags &= (
                 ~ShapeFlags.HYDROELASTIC
             )  # Falling back to mesh/primitive collisions for plane and hfield shapes
+
+        resolved_color = ModelBuilder._coerce_shape_color(color)
+        if resolved_color is None and src is not None:
+            resolved_color = ModelBuilder._coerce_shape_color(getattr(src, "color", None))
+        if resolved_color is None:
+            resolved_color = ModelBuilder._shape_palette_color(shape)
+
         self.shape_flags.append(shape_flags)
         self.shape_type.append(type)
-        self.shape_scale.append((scale[0], scale[1], scale[2]))
+        self.shape_scale.append((float(scale[0]), float(scale[1]), float(scale[2])))
         self.shape_source.append(src)
+        self.shape_color.append(resolved_color)
         self.shape_margin.append(cfg.margin)
         self.shape_is_solid.append(cfg.is_solid)
         self.shape_material_ke.append(cfg.ke)
@@ -5199,6 +5497,7 @@ class ModelBuilder:
         self.shape_sdf_narrow_band_range.append(cfg.sdf_narrow_band_range)
         self.shape_sdf_target_voxel_size.append(cfg.sdf_target_voxel_size)
         self.shape_sdf_max_resolution.append(cfg.sdf_max_resolution)
+        self.shape_sdf_texture_format.append(cfg.sdf_texture_format)
 
         if cfg.has_shape_collision and cfg.collision_filter_parent and body > -1 and body in self.joint_parents:
             for parent_body in self.joint_parents[body]:
@@ -5234,6 +5533,7 @@ class ModelBuilder:
         length: float = 10.0,
         body: int = -1,
         cfg: ShapeConfig | None = None,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5255,6 +5555,7 @@ class ModelBuilder:
             length: The visual/collision extent of the plane along its local Y-axis. If `0.0`, considered infinite for collision. Defaults to `10.0`.
             body: The index of the parent body this shape belongs to. Use -1 for world-static planes. Defaults to `-1`.
             cfg: The configuration for the shape's physical and collision properties. If `None`, :attr:`default_shape_cfg` is used. Defaults to `None`.
+            color: Optional display RGB color with values in [0, 1]. If `None`, uses the per-shape palette color.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute values for SHAPE frequency attributes.
 
@@ -5286,12 +5587,14 @@ class ModelBuilder:
             is_static=True,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_ground_plane(
         self,
         height: float = 0.0,
         cfg: ShapeConfig | None = None,
+        color: Vec3 | None = _DEFAULT_GROUND_PLANE_COLOR,
         label: str | None = None,
     ) -> int:
         """Adds a ground plane collision shape to the model.
@@ -5299,6 +5602,7 @@ class ModelBuilder:
         Args:
             height: The vertical offset of the ground plane along the up-vector axis. Positive values raise the plane, negative values lower it. Defaults to `0.0`.
             cfg: The configuration for the shape's physical and collision properties. If `None`, :attr:`default_shape_cfg` is used. Defaults to `None`.
+            color: Optional display RGB color with values in [0, 1]. Defaults to the ground plane color ``(0.125, 0.125, 0.15)``. Pass ``None`` to use the per-shape palette color instead.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
 
         Returns:
@@ -5310,6 +5614,7 @@ class ModelBuilder:
             length=0.0,
             cfg=cfg,
             label=label or "ground_plane",
+            color=color,
         )
 
     def add_shape_sphere(
@@ -5319,6 +5624,7 @@ class ModelBuilder:
         radius: float = 1.0,
         cfg: ShapeConfig | None = None,
         as_site: bool = False,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5330,6 +5636,7 @@ class ModelBuilder:
             radius: The radius of the sphere. Defaults to `1.0`.
             cfg: The configuration for the shape's properties. If `None`, uses :attr:`default_shape_cfg` (or :attr:`default_site_cfg` when `as_site=True`). If `as_site=True` and `cfg` is provided, a copy is made and site invariants are enforced via `mark_as_site()`. Defaults to `None`.
             as_site: If `True`, creates a site (non-colliding reference point) instead of a collision shape. Defaults to `False`.
+            color: Optional display RGB color with values in [0, 1]. If `None`, uses the per-shape palette color.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute names to values.
 
@@ -5351,24 +5658,27 @@ class ModelBuilder:
             scale=scale,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_ellipsoid(
         self,
         body: int,
         xform: Transform | None = None,
-        a: float = 1.0,
-        b: float = 0.75,
-        c: float = 0.5,
+        rx: float = 1.0,
+        ry: float = 0.75,
+        rz: float = 0.5,
         cfg: ShapeConfig | None = None,
         as_site: bool = False,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
+        **kwargs,
     ) -> int:
         """Adds an ellipsoid collision shape or site to a body.
 
         The ellipsoid is centered at its local origin as defined by `xform`, with semi-axes
-        `a`, `b`, `c` along the local X, Y, Z axes respectively.
+        `rx`, `ry`, `rz` along the local X, Y, Z axes respectively.
 
         Note:
             Ellipsoid collision is handled by the GJK/MPR collision pipeline,
@@ -5377,11 +5687,12 @@ class ModelBuilder:
         Args:
             body: The index of the parent body this shape belongs to. Use -1 for shapes not attached to any specific body.
             xform: The transform of the ellipsoid in the parent body's local frame. If `None`, the identity transform `wp.transform()` is used. Defaults to `None`.
-            a: The semi-axis of the ellipsoid along its local X-axis. Defaults to `1.0`.
-            b: The semi-axis of the ellipsoid along its local Y-axis. Defaults to `0.75`.
-            c: The semi-axis of the ellipsoid along its local Z-axis. Defaults to `0.5`.
+            rx: The semi-axis of the ellipsoid along its local X-axis [m]. Defaults to `1.0`.
+            ry: The semi-axis of the ellipsoid along its local Y-axis [m]. Defaults to `0.75`.
+            rz: The semi-axis of the ellipsoid along its local Z-axis [m]. Defaults to `0.5`.
             cfg: The configuration for the shape's properties. If `None`, uses :attr:`default_shape_cfg` (or :attr:`default_site_cfg` when `as_site=True`). If `as_site=True` and `cfg` is provided, a copy is made and site invariants are enforced via `mark_as_site()`. Defaults to `None`.
             as_site: If `True`, creates a site (non-colliding reference point) instead of a collision shape. Defaults to `False`.
+            color: Optional display RGB color with values in [0, 1]. If ``None``, uses the per-shape palette color.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute names to values.
 
@@ -5399,21 +5710,41 @@ class ModelBuilder:
                 # Add an ellipsoid with semi-axes 1.0, 0.5, 0.25
                 builder.add_shape_ellipsoid(
                     body=body,
-                    a=1.0,  # X semi-axis
-                    b=0.5,  # Y semi-axis
-                    c=0.25,  # Z semi-axis
+                    rx=1.0,  # X semi-axis
+                    ry=0.5,  # Y semi-axis
+                    rz=0.25,  # Z semi-axis
                 )
 
-                # A sphere is a special case where a = b = c
-                builder.add_shape_ellipsoid(body=body, a=0.5, b=0.5, c=0.5)
+                # A sphere is a special case where rx = ry = rz
+                builder.add_shape_ellipsoid(body=body, rx=0.5, ry=0.5, rz=0.5)
         """
+        # Backward compat: accept deprecated a, b, c parameter names
+        _deprecated_map = {"a": ("rx", rx, 1.0), "b": ("ry", ry, 0.75), "c": ("rz", rz, 0.5)}
+        for old_name, (new_name, new_val, default) in _deprecated_map.items():
+            if old_name in kwargs:
+                if new_val != default:
+                    raise TypeError(f"Cannot specify both '{old_name}' and '{new_name}'")
+                warnings.warn(
+                    f"Parameter '{old_name}' is deprecated, use '{new_name}' instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+        if "a" in kwargs:
+            rx = kwargs.pop("a")
+        if "b" in kwargs:
+            ry = kwargs.pop("b")
+        if "c" in kwargs:
+            rz = kwargs.pop("c")
+        if kwargs:
+            raise TypeError(f"Unexpected keyword arguments: {set(kwargs)}")
+
         if cfg is None:
             cfg = self.default_site_cfg if as_site else self.default_shape_cfg
         elif as_site:
             cfg = cfg.copy()
             cfg.mark_as_site()
 
-        scale = wp.vec3(a, b, c)
+        scale = wp.vec3(rx, ry, rz)
         return self.add_shape(
             body=body,
             type=GeoType.ELLIPSOID,
@@ -5422,6 +5753,7 @@ class ModelBuilder:
             scale=scale,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_box(
@@ -5433,6 +5765,7 @@ class ModelBuilder:
         hz: float = 0.5,
         cfg: ShapeConfig | None = None,
         as_site: bool = False,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5448,6 +5781,7 @@ class ModelBuilder:
             hz: The half-extent of the box along its local Z-axis. Defaults to `0.5`.
             cfg: The configuration for the shape's properties. If `None`, uses :attr:`default_shape_cfg` (or :attr:`default_site_cfg` when `as_site=True`). If `as_site=True` and `cfg` is provided, a copy is made and site invariants are enforced via `mark_as_site()`. Defaults to `None`.
             as_site: If `True`, creates a site (non-colliding reference point) instead of a collision shape. Defaults to `False`.
+            color: Optional display RGB color with values in [0, 1]. If ``None``, uses the per-shape palette color.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute names to values.
 
@@ -5469,6 +5803,7 @@ class ModelBuilder:
             scale=scale,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_capsule(
@@ -5479,6 +5814,7 @@ class ModelBuilder:
         half_height: float = 0.5,
         cfg: ShapeConfig | None = None,
         as_site: bool = False,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5493,6 +5829,7 @@ class ModelBuilder:
             half_height: The half-length of the capsule's central cylindrical segment (excluding the hemispherical ends). Defaults to `0.5`.
             cfg: The configuration for the shape's properties. If `None`, uses :attr:`default_shape_cfg` (or :attr:`default_site_cfg` when `as_site=True`). If `as_site=True` and `cfg` is provided, a copy is made and site invariants are enforced via `mark_as_site()`. Defaults to `None`.
             as_site: If `True`, creates a site (non-colliding reference point) instead of a collision shape. Defaults to `False`.
+            color: Optional display RGB color with values in [0, 1]. If ``None``, uses the per-shape palette color.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute names to values.
 
@@ -5519,6 +5856,7 @@ class ModelBuilder:
             scale=scale,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_cylinder(
@@ -5529,6 +5867,7 @@ class ModelBuilder:
         half_height: float = 0.5,
         cfg: ShapeConfig | None = None,
         as_site: bool = False,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5543,6 +5882,7 @@ class ModelBuilder:
             half_height: The half-length of the cylinder along the Z-axis. Defaults to `0.5`.
             cfg: The configuration for the shape's properties. If `None`, uses :attr:`default_shape_cfg` (or :attr:`default_site_cfg` when `as_site=True`). If `as_site=True` and `cfg` is provided, a copy is made and site invariants are enforced via `mark_as_site()`. Defaults to `None`.
             as_site: If `True`, creates a site (non-colliding reference point) instead of a collision shape. Defaults to `False`.
+            color: Optional display RGB color with values in [0, 1]. If ``None``, uses the per-shape palette color.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute values for SHAPE frequency attributes.
 
@@ -5569,6 +5909,7 @@ class ModelBuilder:
             scale=scale,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_cone(
@@ -5579,6 +5920,7 @@ class ModelBuilder:
         half_height: float = 0.5,
         cfg: ShapeConfig | None = None,
         as_site: bool = False,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5594,6 +5936,7 @@ class ModelBuilder:
             half_height: The half-height of the cone (distance from the geometric center to either the base or apex). The total height is 2*half_height. Defaults to `0.5`.
             cfg: The configuration for the shape's physical and collision properties. If `None`, :attr:`default_shape_cfg` is used. Defaults to `None`.
             as_site: If `True`, creates a site (non-colliding reference point) instead of a collision shape. Defaults to `False`.
+            color: Optional display RGB color with values in [0, 1]. If ``None``, uses the per-shape palette color.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute values for SHAPE frequency attributes.
 
@@ -5620,6 +5963,7 @@ class ModelBuilder:
             scale=scale,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_mesh(
@@ -5629,6 +5973,7 @@ class ModelBuilder:
         mesh: Mesh | None = None,
         scale: Vec3 | None = None,
         cfg: ShapeConfig | None = None,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5640,6 +5985,7 @@ class ModelBuilder:
             mesh: The :class:`Mesh` object containing the vertex and triangle data. Defaults to `None`.
             scale: The scale of the mesh. Defaults to `None`, in which case the scale is `(1.0, 1.0, 1.0)`.
             cfg: The configuration for the shape's physical and collision properties. If `None`, :attr:`default_shape_cfg` is used. Defaults to `None`.
+            color: Optional display RGB color with values in [0, 1]. If `None`, falls back to :attr:`~newton.Mesh.color` when available.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute values for SHAPE frequency attributes.
 
@@ -5658,6 +6004,7 @@ class ModelBuilder:
             src=mesh,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_convex_hull(
@@ -5667,7 +6014,9 @@ class ModelBuilder:
         mesh: Mesh | None = None,
         scale: Vec3 | None = None,
         cfg: ShapeConfig | None = None,
+        color: Vec3 | None = None,
         label: str | None = None,
+        custom_attributes: dict[str, Any] | None = None,
     ) -> int:
         """Adds a convex hull collision shape to a body.
 
@@ -5677,7 +6026,9 @@ class ModelBuilder:
             mesh: The :class:`Mesh` object containing the vertex data for the convex hull. Defaults to `None`.
             scale: The scale of the convex hull. Defaults to `None`, in which case the scale is `(1.0, 1.0, 1.0)`.
             cfg: The configuration for the shape's physical and collision properties. If `None`, :attr:`default_shape_cfg` is used. Defaults to `None`.
+            color: Optional display RGB color with values in [0, 1]. If `None`, falls back to :attr:`~newton.Mesh.color` when available.
             label: An optional unique label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
+            custom_attributes: Dictionary of custom attribute values for SHAPE frequency attributes.
 
         Returns:
             The index of the newly added shape.
@@ -5693,6 +6044,8 @@ class ModelBuilder:
             scale=scale,
             src=mesh,
             label=label,
+            color=color,
+            custom_attributes=custom_attributes,
         )
 
     def add_shape_heightfield(
@@ -5701,20 +6054,22 @@ class ModelBuilder:
         heightfield: Heightfield | None = None,
         scale: Vec3 | None = None,
         cfg: ShapeConfig | None = None,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
         """Adds a heightfield (2D elevation grid) collision shape to the model.
 
         Heightfields are efficient representations of terrain using a 2D grid of elevation values.
-        They are always static (attached to the world body) and more memory-efficient than
+        They are always static (``body=-1``) and more memory-efficient than
         equivalent triangle meshes.
 
         Args:
             xform: The transform of the heightfield in world frame. If `None`, the identity transform `wp.transform()` is used. Defaults to `None`.
             heightfield: The :class:`Heightfield` object containing the elevation grid data. Defaults to `None`.
-            scale: The scale of the heightfield. Defaults to `None`, in which case the scale is `(1.0, 1.0, 1.0)`.
+            scale: Per-instance scale applied to the heightfield extents (``hx``, ``hy``, ``min_z``, ``max_z``). Lets the same :class:`Heightfield` asset be reused at different sizes across shapes. Defaults to ``None``, which is treated as ``(1.0, 1.0, 1.0)``.
             cfg: The configuration for the shape's physical and collision properties. If `None`, :attr:`default_shape_cfg` is used. Defaults to `None`.
+            color: Optional display RGB color with values in [0, 1]. If ``None``, uses the per-shape palette color.
             label: An optional label for identifying the shape. If `None`, a default label is automatically generated. Defaults to `None`.
             custom_attributes: Dictionary of custom attribute values for SHAPE frequency attributes.
 
@@ -5736,16 +6091,18 @@ class ModelBuilder:
             is_static=True,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_shape_gaussian(
         self,
         body: int,
-        gaussian: Gaussian,
         xform: Transform | None = None,
+        gaussian: Gaussian | None = None,
         scale: Vec3 | None = None,
         cfg: ShapeConfig | None = None,
         collision_proxy: str | Mesh | None = None,
+        color: Vec3 | None = None,
         label: str | None = None,
         custom_attributes: dict[str, Any] | None = None,
     ) -> int:
@@ -5757,8 +6114,8 @@ class ModelBuilder:
         Args:
             body: The index of the parent body this shape belongs to.
                 Use ``-1`` for static world geometry.
-            gaussian: The :class:`Gaussian` splat asset.
             xform: Transform in parent body's local frame. Defaults to identity.
+            gaussian: The :class:`Gaussian` splat asset.
             scale: 3D scale applied to Gaussian positions. Defaults to ``(1, 1, 1)``.
             cfg: Shape configuration. If ``None``, uses :attr:`default_shape_cfg`
                 with ``has_shape_collision=False`` (Gaussians are render-only by
@@ -5768,6 +6125,7 @@ class ModelBuilder:
                 - ``None``: no collision (render-only).
                 - ``"convex_hull"``: auto-generate convex hull from Gaussian positions.
                 - A :class:`Mesh` instance: use the provided mesh as collision proxy.
+            color: Optional display RGB color with values in [0, 1]. If ``None``, uses the per-shape palette color.
             label: Optional unique label for identifying the shape.
             custom_attributes: Dictionary of custom attribute values for SHAPE
                 frequency attributes.
@@ -5775,6 +6133,23 @@ class ModelBuilder:
         Returns:
             The index of the Gaussian shape.
         """
+        # Backward compat: detect Gaussian passed as second positional arg (old API
+        # had signature add_shape_gaussian(body, gaussian, xform=...)).
+        if isinstance(xform, Gaussian):
+            warnings.warn(
+                "Passing 'gaussian' as the second positional argument is deprecated. "
+                "Use add_shape_gaussian(body, xform=..., gaussian=...) instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if gaussian is not None:
+                raise TypeError("Cannot pass 'gaussian' both as positional and keyword argument.")
+            gaussian = xform
+            xform = None
+
+        if gaussian is None:
+            raise TypeError("'gaussian' is required when adding a Gaussian shape.")
+
         if cfg is None:
             cfg = self.default_shape_cfg.copy()
         else:
@@ -5817,6 +6192,7 @@ class ModelBuilder:
             is_static=True,
             label=label,
             custom_attributes=custom_attributes,
+            color=color,
         )
 
     def add_site(
@@ -5914,6 +6290,28 @@ class ModelBuilder:
                 - If convex decomposition via CoACD or V-HACD fails or dependencies are not available, the method will fall back to using the ``convex_hull`` method.
                 - If convex hull approximation fails, it will fall back to the ``bounding_box`` method.
 
+        .. important::
+
+            Apply this method to a builder **before** passing it to
+            :meth:`~newton.ModelBuilder.replicate` or
+            :meth:`~newton.ModelBuilder.add_world`, not to the parent builder
+            afterwards. Replication copies mesh *references*, not mesh data, so
+            ``N`` worlds share one :class:`~newton.Mesh` object. Approximating
+            first produces a single simplified copy that is shared across all
+            replicated worlds; approximating afterwards allocates one copy per
+            replicated shape — up to ``N`` times the memory for identical data.
+
+            Recommended:
+
+            .. code-block:: python
+
+                arm = newton.ModelBuilder()
+                # ... populate arm ...
+                arm.approximate_meshes(method="convex_hull")
+
+                scene = newton.ModelBuilder()
+                scene.replicate(arm, world_count=N)
+
         Args:
             method: The method to use for approximating the mesh shapes.
             shape_indices: The indices of the shapes to simplify. If `None`, all mesh shapes that have the :attr:`ShapeFlags.COLLIDE_SHAPES` flag set are simplified.
@@ -5928,6 +6326,16 @@ class ModelBuilder:
             raise ValueError(
                 f"Unsupported remeshing method: {method}. Supported methods are: {', '.join(remeshing_methods)}."
             )
+
+        def get_shape_custom_attributes(shape: int) -> dict[str, Any] | None:
+            custom_attributes = {
+                full_key: custom_attr.values[shape]
+                for full_key, custom_attr in self.custom_attributes.items()
+                if custom_attr.frequency == Model.AttributeFrequency.SHAPE
+                and isinstance(custom_attr.values, dict)
+                and shape in custom_attr.values
+            }
+            return custom_attributes or None
 
         if shape_indices is None:
             shape_indices = [
@@ -5947,6 +6355,8 @@ class ModelBuilder:
 
                 body = self.shape_body[shape]
                 xform = self.shape_transform[shape]
+                color = self.shape_color[shape]
+                custom_attributes = get_shape_custom_attributes(shape)
                 cfg = ModelBuilder.ShapeConfig(
                     density=0.0,  # do not add extra mass / inertia
                     margin=self.shape_margin[shape],
@@ -5960,8 +6370,10 @@ class ModelBuilder:
                     xform=xform,
                     cfg=cfg,
                     mesh=self.shape_source[shape],
+                    color=color,
                     label=f"{self.shape_label[shape]}_visual",
                     scale=self.shape_scale[shape],
+                    custom_attributes=custom_attributes,
                 )
 
                 # disable visibility of the original shape
@@ -6020,6 +6432,8 @@ class ModelBuilder:
                     if len(decomposition) > 1:
                         body = self.shape_body[shape]
                         xform = self.shape_transform[shape]
+                        color = self.shape_color[shape]
+                        custom_attributes = get_shape_custom_attributes(shape)
                         cfg = ModelBuilder.ShapeConfig(
                             density=0.0,  # do not add extra mass / inertia
                             ke=self.shape_material_ke[shape],
@@ -6045,7 +6459,9 @@ class ModelBuilder:
                                 mesh=Mesh(decomposition[i][0], decomposition[i][1]),
                                 scale=scale,
                                 cfg=cfg,
+                                color=color,
                                 label=f"{self.shape_label[shape]}_convex_{i}",
+                                custom_attributes=custom_attributes,
                             )
                     remeshed_shapes.add(shape)
             except Exception as e:
@@ -6168,16 +6584,12 @@ class ModelBuilder:
                 orientations are computed automatically to align +Z with each segment direction.
             radius: Capsule radius.
             cfg: Shape configuration for the capsules. If None, :attr:`default_shape_cfg` is used.
-            stretch_stiffness: Stretch stiffness for the cable joints. For rods, this is treated as a
-                material-like axial/shear stiffness (commonly interpreted as EA)
-                with units [N] and is internally converted to an effective point stiffness [N/m] by dividing by
-                segment length. If None, defaults to 1.0e9.
+            stretch_stiffness: Per-joint cable stretch stiffness, stored directly as ``target_ke`` [N/m].
+                If None, defaults to 1.0e5.
             stretch_damping: Stretch damping for the cable joints (applied per-joint; not length-normalized). If None,
                 defaults to 0.0.
-            bend_stiffness: Bend/twist stiffness for the cable joints. For rods, this is treated as a
-                material-like bending/twist stiffness (e.g., EI) with units [N*m^2] and is internally converted to
-                an effective per-joint stiffness [N*m] (torque per radian) by dividing by segment length. If None,
-                defaults to 0.0.
+            bend_stiffness: Per-joint cable bend/twist stiffness, stored directly as ``target_ke`` [N*m]
+                (torque per radian). If None, defaults to 0.0.
             bend_damping: Bend/twist damping for the cable joints (applied per-joint; not length-normalized). If None,
                 defaults to 0.0.
             closed: If True, connects the last segment back to the first to form a closed loop. If False,
@@ -6202,11 +6614,9 @@ class ModelBuilder:
             ValueError: If the rod has fewer than 2 segments.
 
         Note:
-            - Bend defaults are 0.0 (no bending resistance unless specified). Stretch defaults to a high
-              stiffness (1.0e9), which keeps neighboring capsules closely coupled (approximately inextensible).
-            - Internally, stretch and bend stiffnesses are pre-scaled by dividing by segment length so solver kernels
-              do not need per-segment length normalization.
-            - Damping values are passed through as provided (per joint) and are not length-normalized.
+            - Bend defaults are 0.0 (no bending resistance unless specified). Stretch defaults to 1.0e5;
+              pass a larger value when neighboring capsules should remain nearly inextensible.
+            - Stretch, bend, and damping values are passed through as provided per joint.
             - Each segment is implemented as a capsule primitive. The segment's body transform is
               placed at the start point ``positions[i]`` with a local center-of-mass offset of
               ``(0, 0, half_height)`` so that the COM lies at the segment midpoint. The capsule shape
@@ -6216,8 +6626,8 @@ class ModelBuilder:
         if cfg is None:
             cfg = self.default_shape_cfg
 
-        # Stretch defaults: high stiffness to keep neighboring capsules tightly coupled
-        stretch_stiffness = 1.0e9 if stretch_stiffness is None else stretch_stiffness
+        # Stretch defaults to the cable/rod axial stiffness used by VBD examples.
+        stretch_stiffness = 1.0e5 if stretch_stiffness is None else stretch_stiffness
         stretch_damping = 0.0 if stretch_damping is None else stretch_damping
 
         # Bend defaults: 0.0 (users must explicitly set for bending resistance)
@@ -6302,19 +6712,15 @@ class ModelBuilder:
                 parent_xform = wp.transform(wp.vec3(0.0, 0.0, L_last), wp.quat_identity())
                 child_xform = wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity())
 
-                # Normalize stiffness by segment length, consistent with add_rod_graph().
-                stretch_ke_eff = stretch_stiffness / L_last
-                bend_ke_eff = bend_stiffness / L_last
-
                 loop_joint_label = f"{label}_cable_{len(link_joints) + 1}" if label else None
                 j_loop = self.add_joint_cable(
                     parent=last_body,
                     child=first_body,
                     parent_xform=parent_xform,
                     child_xform=child_xform,
-                    bend_stiffness=bend_ke_eff,
+                    bend_stiffness=bend_stiffness,
                     bend_damping=bend_damping,
-                    stretch_stiffness=stretch_ke_eff,
+                    stretch_stiffness=stretch_stiffness,
                     stretch_damping=stretch_damping,
                     label=loop_joint_label,
                     collision_filter_parent=True,
@@ -6369,11 +6775,11 @@ class ModelBuilder:
                 capsule body oriented so its local +Z points from node ``u`` to node ``v``.
             radius: Capsule radius.
             cfg: Shape configuration for the capsules. If None, :attr:`default_shape_cfg` is used.
-            stretch_stiffness: Material-like axial stiffness (EA) [N], normalized by edge length
-                into an effective joint stiffness [N/m]. Defaults to 1.0e9.
+            stretch_stiffness: Per-joint cable stretch stiffness, stored directly as ``target_ke`` [N/m].
+                Defaults to 1.0e5.
             stretch_damping: Stretch damping (per joint). Defaults to 0.0.
-            bend_stiffness: Material-like bend/twist stiffness (EI) [N*m^2], normalized by edge
-                length into an effective joint stiffness [N*m]. Defaults to 0.0.
+            bend_stiffness: Per-joint cable bend/twist stiffness, stored directly as ``target_ke`` [N*m].
+                Defaults to 0.0.
             bend_damping: Bend/twist damping (per joint). Defaults to 0.0.
             label: Optional label prefix for bodies, shapes, joints, and articulations.
             wrap_in_articulation: If True, wraps the generated joint forest into one articulation
@@ -6394,8 +6800,8 @@ class ModelBuilder:
         if cfg is None:
             cfg = self.default_shape_cfg
 
-        # Stretch defaults: high stiffness to keep neighboring capsules tightly coupled
-        stretch_stiffness = 1.0e9 if stretch_stiffness is None else stretch_stiffness
+        # Stretch defaults to the cable/rod axial stiffness used by VBD examples.
+        stretch_stiffness = 1.0e5 if stretch_stiffness is None else stretch_stiffness
         stretch_damping = 0.0 if stretch_damping is None else stretch_damping
 
         # Bend defaults: 0.0 (users must explicitly set for bending resistance)
@@ -6417,7 +6823,7 @@ class ModelBuilder:
                 f"got {len(quaternions)} quaternions"
             )
 
-        # Guard against near-zero lengths: edge length is used to normalize stiffness (EA/L, EI/L).
+        # Guard against near-zero lengths: edge length is used for capsule geometry and joint anchors.
         min_segment_length = 1.0e-9
 
         # Coerce all input node positions to wp.vec3 so arithmetic (p1 - p0), wp.length, wp.normalize
@@ -6547,14 +6953,6 @@ class ModelBuilder:
 
                     child_xform = _edge_anchor_xform(child_edge, node_idx)
 
-                    # Normalize stiffness by segment length, consistent with add_rod().
-                    # Use a symmetric length so stiffness is traversal/order invariant.
-                    L_parent = edge_len[parent_edge]
-                    L_child = edge_len[child_edge]
-                    L_sym = 0.5 * (L_parent + L_child)
-                    stretch_ke_eff = stretch_stiffness / L_sym
-                    bend_ke_eff = bend_stiffness / L_sym
-
                     joint_counter += 1
                     joint_label = f"{label}_cable_{joint_counter}" if label else None
 
@@ -6563,9 +6961,9 @@ class ModelBuilder:
                         child=child_body,
                         parent_xform=parent_xform,
                         child_xform=child_xform,
-                        bend_stiffness=bend_ke_eff,
+                        bend_stiffness=bend_stiffness,
                         bend_damping=bend_damping,
-                        stretch_stiffness=stretch_ke_eff,
+                        stretch_stiffness=stretch_stiffness,
                         stretch_damping=stretch_damping,
                         label=joint_label,
                         collision_filter_parent=True,
@@ -6610,14 +7008,6 @@ class ModelBuilder:
                             parent_xform = _edge_anchor_xform(parent_edge, shared_node)
                             child_xform = _edge_anchor_xform(child_edge, shared_node)
 
-                            # Normalize stiffness by segment length, consistent with add_rod().
-                            # Use a symmetric length so stiffness is traversal/order invariant.
-                            L_parent = edge_len[parent_edge]
-                            L_child = edge_len[child_edge]
-                            L_sym = 0.5 * (L_parent + L_child)
-                            stretch_ke_eff = stretch_stiffness / L_sym
-                            bend_ke_eff = bend_stiffness / L_sym
-
                             joint_counter += 1
                             joint_label = f"{label}_cable_{joint_counter}" if label else None
 
@@ -6626,9 +7016,9 @@ class ModelBuilder:
                                 child=child_body,
                                 parent_xform=parent_xform,
                                 child_xform=child_xform,
-                                bend_stiffness=bend_ke_eff,
+                                bend_stiffness=bend_stiffness,
                                 bend_damping=bend_damping,
-                                stretch_stiffness=stretch_ke_eff,
+                                stretch_stiffness=stretch_stiffness,
                                 stretch_damping=stretch_damping,
                                 label=joint_label,
                                 collision_filter_parent=True,
@@ -6865,7 +7255,7 @@ class ModelBuilder:
         """Adds a triangular FEM element between three particles in the system.
 
         Triangles are modeled as viscoelastic elements with elastic stiffness and damping
-        parameters specified on the model. See :attr:`~newton.Model.tri_ke`, :attr:`~newton.Model.tri_kd`.
+        parameters specified on the model. See :attr:`~newton.Model.tri_materials`.
 
         Args:
             i: The index of the first particle.
@@ -6935,9 +7325,9 @@ class ModelBuilder:
 
     def add_triangles(
         self,
-        i: list[int] | nparray,
-        j: list[int] | nparray,
-        k: list[int] | nparray,
+        i: list[int] | np.ndarray,
+        j: list[int] | np.ndarray,
+        k: list[int] | np.ndarray,
         tri_ke: list[float] | None = None,
         tri_ka: list[float] | None = None,
         tri_kd: list[float] | None = None,
@@ -7809,9 +8199,9 @@ class ModelBuilder:
         vertices: list[Vec3] | None = None,
         indices: list[int] | None = None,
         density: float | None = None,
-        k_mu: float | nparray | None = None,
-        k_lambda: float | nparray | None = None,
-        k_damp: float | nparray | None = None,
+        k_mu: float | np.ndarray | None = None,
+        k_lambda: float | np.ndarray | None = None,
+        k_damp: float | np.ndarray | None = None,
         tri_ke: float = 0.0,
         tri_ka: float = 0.0,
         tri_kd: float = 0.0,
@@ -9344,7 +9734,7 @@ class ModelBuilder:
             gaussians = []
             for geo in self.shape_source:
                 geo_hash = hash(geo)  # avoid repeated hash computations
-                if geo:
+                if geo and not isinstance(geo, Heightfield):
                     if geo_hash not in finalized_geos:
                         if isinstance(geo, Mesh):
                             finalized_geos[geo_hash] = geo.finalize(device=device)
@@ -9371,6 +9761,7 @@ class ModelBuilder:
             m.shape_world = wp.array(self.shape_world, dtype=wp.int32)
 
             m.shape_source = self.shape_source  # used for rendering
+            m.shape_color = wp.array(self.shape_color, dtype=wp.vec3)
 
             m.shape_material_ke = wp.array(self.shape_material_ke, dtype=wp.float32, requires_grad=requires_grad)
             m.shape_material_kd = wp.array(self.shape_material_kd, dtype=wp.float32, requires_grad=requires_grad)
@@ -9399,7 +9790,9 @@ class ModelBuilder:
             local_aabb_lower = []
             local_aabb_upper = []
             voxel_resolution = []
-            voxel_budget = 100  # Maximum voxels per shape for contact reduction
+            from ..geometry.contact_reduction import NUM_VOXEL_DEPTH_SLOTS  # noqa: PLC0415
+
+            voxel_budget = NUM_VOXEL_DEPTH_SLOTS
 
             # Cache per unique (shape_type, shape_params, margin) to avoid redundant AABB computation
             # for instanced shapes (e.g., 256 robots sharing the same shape parameters)
@@ -9450,24 +9843,18 @@ class ModelBuilder:
                     if shape_type == GeoType.MESH and shape_src is not None:
                         # Compute local AABB from mesh vertices
                         vertices = shape_src.vertices
-                        aabb_lower = vertices.min(axis=0)
-                        aabb_upper = vertices.max(axis=0)
-
-                        # Apply scale to get the actual local-space bounds
-                        aabb_lower = aabb_lower * np.array(shape_scale)
-                        aabb_upper = aabb_upper * np.array(shape_scale)
+                        lo = vertices.min(axis=0) * np.array(shape_scale)
+                        hi = vertices.max(axis=0) * np.array(shape_scale)
+                        aabb_lower = np.minimum(lo, hi)
+                        aabb_upper = np.maximum(lo, hi)
 
                         nx, ny, nz = compute_voxel_resolution_from_aabb(aabb_lower, aabb_upper, voxel_budget)
 
                     elif shape_type == GeoType.CONVEX_MESH and shape_src is not None:
-                        # Compute local AABB from convex mesh vertices (similar to MESH)
-                        vertices = shape_src.vertices
-                        aabb_lower = vertices.min(axis=0)
-                        aabb_upper = vertices.max(axis=0)
-
-                        # Apply scale to get the actual local-space bounds
-                        aabb_lower = aabb_lower * np.array(shape_scale)
-                        aabb_upper = aabb_upper * np.array(shape_scale)
+                        lo = shape_src.vertices.min(axis=0) * np.array(shape_scale)
+                        hi = shape_src.vertices.max(axis=0) * np.array(shape_scale)
+                        aabb_lower = np.minimum(lo, hi)
+                        aabb_upper = np.maximum(lo, hi)
 
                         nx, ny, nz = compute_voxel_resolution_from_aabb(aabb_lower, aabb_upper, voxel_budget)
 
@@ -9516,8 +9903,17 @@ class ModelBuilder:
                         aabb_upper = np.array([r, r, half_height])
                         nx, ny, nz = compute_voxel_resolution_from_aabb(aabb_lower, aabb_upper, voxel_budget)
 
+                    elif shape_type == GeoType.HFIELD and shape_src is not None:
+                        hx = abs(shape_src.hx * shape_scale[0])
+                        hy = abs(shape_src.hy * shape_scale[1])
+                        z_lo = shape_src.min_z * shape_scale[2]
+                        z_hi = shape_src.max_z * shape_scale[2]
+                        aabb_lower = np.array([-hx, -hy, min(z_lo, z_hi)])
+                        aabb_upper = np.array([hx, hy, max(z_lo, z_hi)])
+                        nx, ny, nz = compute_voxel_resolution_from_aabb(aabb_lower, aabb_upper, voxel_budget)
+
                     else:
-                        # Other shapes (PLANE, HFIELD, etc.): use default unit cube with 1x1x1 voxel grid
+                        # Other shapes (PLANE, etc.): use default unit cube with 1x1x1 voxel grid
                         aabb_lower = np.array([-1.0, -1.0, -1.0])
                         aabb_upper = np.array([1.0, 1.0, 1.0])
                         nx, ny, nz = 1, 1, 1
@@ -9534,8 +9930,28 @@ class ModelBuilder:
             m._shape_voxel_resolution = wp.array(voxel_resolution, dtype=wp.vec3i, device=device)
 
             # ---------------------
-            # Compute and compact SDF resources (shared table + per-shape index indirection)
-            from ..geometry.sdf_utils import SDFData, compute_sdf_from_shape  # noqa: PLC0415
+            # Compute and compact texture SDF resources (shared table + per-shape index indirection)
+            from ..geometry.types import Mesh as NewtonMesh  # noqa: PLC0415
+
+            def _create_primitive_mesh(stype: int, scale: Sequence[float] | None) -> NewtonMesh | None:
+                """Create a watertight mesh from a primitive shape for texture SDF construction."""
+                from ..core.types import Axis  # noqa: PLC0415
+
+                sx, sy, sz = scale if scale is not None else (1.0, 1.0, 1.0)
+                common_kw = {"compute_normals": False, "compute_uvs": False, "compute_inertia": False}
+                if stype == GeoType.BOX:
+                    return NewtonMesh.create_box(sx, sy, sz, duplicate_vertices=False, **common_kw)
+                elif stype == GeoType.SPHERE:
+                    return NewtonMesh.create_sphere(sx, **common_kw)
+                elif stype == GeoType.CAPSULE:
+                    return NewtonMesh.create_capsule(sx, sy, up_axis=Axis.Z, **common_kw)
+                elif stype == GeoType.CYLINDER:
+                    return NewtonMesh.create_cylinder(sx, sy, up_axis=Axis.Z, **common_kw)
+                elif stype == GeoType.CONE:
+                    return NewtonMesh.create_cone(sx, sy, up_axis=Axis.Z, **common_kw)
+                elif stype == GeoType.ELLIPSOID:
+                    return NewtonMesh.create_ellipsoid(sx, sy, sz, **common_kw)
+                return None
 
             current_device = wp.get_device(device)
             is_gpu = current_device.is_cuda
@@ -9554,14 +9970,28 @@ class ModelBuilder:
             if (has_mesh_sdf or has_hydroelastic_shapes) and not is_gpu:
                 raise ValueError(
                     "SDF collision paths require a CUDA-capable GPU device. "
-                    "wp.Volume (used for SDF collision) only supports CUDA."
+                    "Texture SDFs (used for SDF collision) only support CUDA."
                 )
 
-            compact_sdf_data = []
-            compact_sdf_volume = []
-            compact_sdf_coarse_volume = []
             sdf_block_coords = []
             sdf_index2blocks = []
+            from ..geometry.sdf_texture import (  # noqa: PLC0415
+                QuantizationMode,
+                TextureSDFData,
+                create_empty_texture_sdf_data,
+                create_texture_sdf_from_mesh,
+            )
+
+            _tex_fmt_map = {
+                "float32": QuantizationMode.FLOAT32,
+                "uint16": QuantizationMode.UINT16,
+                "uint8": QuantizationMode.UINT8,
+            }
+
+            compact_texture_sdf_data = []
+            compact_texture_sdf_coarse_textures = []
+            compact_texture_sdf_subgrid_textures = []
+            compact_texture_sdf_subgrid_start_slots = []
             shape_sdf_index = [-1] * len(self.shape_type)
             sdf_cache = {}
 
@@ -9570,103 +10000,145 @@ class ModelBuilder:
                 shape_src = self.shape_source[i]
                 shape_flags = self.shape_flags[i]
                 shape_scale = self.shape_scale[i]
-                shape_margin = self.shape_margin[i]
                 shape_gap = self.shape_gap[i]
                 sdf_narrow_band_range = self.shape_sdf_narrow_band_range[i]
                 sdf_target_voxel_size = self.shape_sdf_target_voxel_size[i]
                 sdf_max_resolution = self.shape_sdf_max_resolution[i]
+                sdf_tex_fmt = self.shape_sdf_texture_format[i]
                 is_hydroelastic = bool(shape_flags & ShapeFlags.HYDROELASTIC)
                 has_shape_collision = bool(shape_flags & ShapeFlags.COLLIDE_SHAPES)
 
-                sdf_data = None
-                sparse_volume = None
-                coarse_volume = None
                 block_coords = []
                 cache_key = None
+                mesh_sdf = None
 
                 if shape_type == GeoType.MESH and has_shape_collision and shape_src is not None:
                     mesh_sdf = getattr(shape_src, "sdf", None)
                     if mesh_sdf is not None:
                         cache_key = ("mesh_sdf", id(mesh_sdf))
-                        sdf_data = mesh_sdf.to_kernel_data()
-                        sparse_volume = mesh_sdf.sparse_volume
-                        coarse_volume = mesh_sdf.coarse_volume
-                        block_coords = list(mesh_sdf.block_coords) if mesh_sdf.block_coords is not None else []
+                        if mesh_sdf.texture_block_coords is not None:
+                            block_coords = list(mesh_sdf.texture_block_coords)
+                        elif mesh_sdf.block_coords is not None:
+                            block_coords = list(mesh_sdf.block_coords)
+                        else:
+                            block_coords = []
                 elif is_hydroelastic and has_shape_collision:
-                    bake_scale = True
-                    # Keep voxel-size-driven generation independent from max_resolution.
                     effective_max_resolution = sdf_max_resolution
                     if sdf_target_voxel_size is None and effective_max_resolution is None:
                         effective_max_resolution = 64
                     cache_key = (
                         "primitive_generated",
                         shape_type,
-                        shape_margin,
                         shape_gap,
                         tuple(sdf_narrow_band_range),
                         sdf_target_voxel_size,
                         effective_max_resolution,
                         tuple(shape_scale),
+                        sdf_tex_fmt,
                     )
-                    if cache_key not in sdf_cache:
-                        sdf_data, sparse_volume, coarse_volume, block_coords = compute_sdf_from_shape(
-                            shape_type=shape_type,
-                            shape_geo=None,
-                            shape_scale=shape_scale,
-                            shape_margin=shape_margin,
-                            narrow_band_distance=sdf_narrow_band_range,
-                            margin=shape_gap,
-                            target_voxel_size=sdf_target_voxel_size,
-                            max_resolution=effective_max_resolution,
-                            bake_scale=bake_scale,
-                            device=device,
-                        )
 
                 if cache_key is not None:
                     if cache_key in sdf_cache:
                         shape_sdf_index[i] = sdf_cache[cache_key]
                     else:
-                        sdf_idx = len(compact_sdf_data)
+                        sdf_idx = len(compact_texture_sdf_data)
                         sdf_cache[cache_key] = sdf_idx
                         shape_sdf_index[i] = sdf_idx
 
-                        compact_sdf_data.append(sdf_data)
-                        compact_sdf_volume.append(sparse_volume)
-                        compact_sdf_coarse_volume.append(coarse_volume)
+                        tex_block_coords = None
+                        if mesh_sdf is not None:
+                            tex_data = mesh_sdf.to_texture_kernel_data()
+                            if tex_data is not None:
+                                compact_texture_sdf_data.append(tex_data)
+                                compact_texture_sdf_coarse_textures.append(mesh_sdf._coarse_texture)
+                                compact_texture_sdf_subgrid_textures.append(mesh_sdf._subgrid_texture)
+                                compact_texture_sdf_subgrid_start_slots.append(tex_data.subgrid_start_slots)
+                                if mesh_sdf.texture_block_coords is not None:
+                                    tex_block_coords = mesh_sdf.texture_block_coords
+                            else:
+                                compact_texture_sdf_data.append(create_empty_texture_sdf_data())
+                                compact_texture_sdf_coarse_textures.append(None)
+                                compact_texture_sdf_subgrid_textures.append(None)
+                                compact_texture_sdf_subgrid_start_slots.append(None)
+                        else:
+                            prim_mesh = _create_primitive_mesh(shape_type, shape_scale)
+                            if prim_mesh is not None:
+                                prim_wp_mesh = wp.Mesh(
+                                    points=wp.array(prim_mesh.vertices, dtype=wp.vec3, device=device),
+                                    indices=wp.array(prim_mesh.indices.flatten(), dtype=wp.int32, device=device),
+                                    support_winding_number=True,
+                                )
+                                try:
+                                    tex_data, c_tex, s_tex, tex_bc = create_texture_sdf_from_mesh(
+                                        prim_wp_mesh,
+                                        margin=shape_gap,
+                                        narrow_band_range=tuple(sdf_narrow_band_range),
+                                        max_resolution=effective_max_resolution,
+                                        target_voxel_size=sdf_target_voxel_size,
+                                        quantization_mode=_tex_fmt_map[sdf_tex_fmt],
+                                        scale_baked=True,
+                                        device=device,
+                                    )
+                                except Exception as e:
+                                    warnings.warn(
+                                        f"Texture SDF construction failed for shape {i} "
+                                        f"(type={shape_type}): {e}. Falling back to BVH.",
+                                        stacklevel=2,
+                                    )
+                                    tex_data = create_empty_texture_sdf_data()
+                                    c_tex = None
+                                    s_tex = None
+                                    tex_bc = None
+                                compact_texture_sdf_data.append(tex_data)
+                                compact_texture_sdf_coarse_textures.append(c_tex)
+                                compact_texture_sdf_subgrid_textures.append(s_tex)
+                                compact_texture_sdf_subgrid_start_slots.append(
+                                    tex_data.subgrid_start_slots if c_tex is not None else None
+                                )
+                                tex_block_coords = tex_bc
+                            else:
+                                compact_texture_sdf_data.append(create_empty_texture_sdf_data())
+                                compact_texture_sdf_coarse_textures.append(None)
+                                compact_texture_sdf_subgrid_textures.append(None)
+                                compact_texture_sdf_subgrid_start_slots.append(None)
+
+                        final_block_coords = list(tex_block_coords) if tex_block_coords is not None else block_coords
                         block_start_idx = len(sdf_block_coords)
-                        sdf_block_coords.extend(block_coords)
+                        sdf_block_coords.extend(final_block_coords)
                         sdf_index2blocks.append([block_start_idx, len(sdf_block_coords)])
 
-            m.sdf_data = (
-                wp.array(compact_sdf_data, dtype=SDFData, device=device)
-                if compact_sdf_data
-                else wp.array([], dtype=SDFData, device=device)
-            )
-            m.sdf_volume = compact_sdf_volume
-            m.sdf_coarse_volume = compact_sdf_coarse_volume
             m.shape_sdf_index = wp.array(shape_sdf_index, dtype=wp.int32, device=device)
             m.sdf_block_coords = wp.array(sdf_block_coords, dtype=wp.vec3us)
             m.sdf_index2blocks = (
                 wp.array(sdf_index2blocks, dtype=wp.vec2i) if sdf_index2blocks else wp.array([], dtype=wp.vec2i)
             )
+            m.texture_sdf_data = (
+                wp.array(compact_texture_sdf_data, dtype=TextureSDFData, device=device)
+                if compact_texture_sdf_data
+                else wp.array([], dtype=TextureSDFData, device=device)
+            )
+            m.texture_sdf_coarse_textures = compact_texture_sdf_coarse_textures
+            m.texture_sdf_subgrid_textures = compact_texture_sdf_subgrid_textures
+            m.texture_sdf_subgrid_start_slots = compact_texture_sdf_subgrid_start_slots
 
             # ---------------------
             # heightfield collision data
             hfield_count = sum(1 for t in self.shape_type if t == GeoType.HFIELD)
             has_heightfields = hfield_count > 0
+            m.has_heightfields = has_heightfields
             if hfield_count > 1:
                 warnings.warn(
                     "Heightfield-vs-heightfield collision is not supported; "
                     "contacts between heightfield pairs will be skipped.",
                     stacklevel=2,
                 )
-            if has_heightfields:
-                from ..utils.heightfield import HeightfieldData, create_empty_heightfield_data  # noqa: PLC0415
+            from ..utils.heightfield import HeightfieldData, create_empty_heightfield_data  # noqa: PLC0415
 
-                hfield_data_list = []
-                elevation_chunks = []
-                offset = 0
-                empty_hfield = create_empty_heightfield_data()
+            compact_heightfield_data = []
+            elevation_chunks = []
+            shape_heightfield_index = [-1] * len(self.shape_type)
+            offset = 0
+            if has_heightfields:
                 for i in range(len(self.shape_type)):
                     if self.shape_type[i] == GeoType.HFIELD and self.shape_source[i] is not None:
                         hf = self.shape_source[i]
@@ -9674,30 +10146,78 @@ class ModelBuilder:
                         hd.data_offset = offset
                         hd.nrow = hf.nrow
                         hd.ncol = hf.ncol
-                        hd.hx = hf.hx
-                        hd.hy = hf.hy
-                        hd.min_z = hf.min_z
-                        hd.max_z = hf.max_z
-                        hfield_data_list.append(hd)
+                        # Bake the per-instance scale into the extents so narrow-phase
+                        # collision and raycast (which read from HeightfieldData) apply
+                        # scale consistently. ``abs`` on hx/hy because the raycast DDA
+                        # and parallel-slab checks assume non-negative planar extents;
+                        # z uses raw multiplication so ``sz < 0`` inverts the surface
+                        # (``min_z > max_z`` already encodes an inverted heightfield).
+                        sx, sy, sz = self.shape_scale[i]
+                        hd.hx = abs(hf.hx * sx)
+                        hd.hy = abs(hf.hy * sy)
+                        hd.min_z = hf.min_z * sz
+                        hd.max_z = hf.max_z * sz
+                        shape_heightfield_index[i] = len(compact_heightfield_data)
+                        compact_heightfield_data.append(hd)
                         elevation_chunks.append(hf.data.flatten())
                         offset += hf.nrow * hf.ncol
-                    else:
-                        hfield_data_list.append(empty_hfield)
-                m.shape_heightfield_data = wp.array(hfield_data_list, dtype=HeightfieldData, device=device)
-                if elevation_chunks:
-                    m.heightfield_elevation_data = wp.array(
-                        np.concatenate(elevation_chunks), dtype=wp.float32, device=device
-                    )
-                else:
-                    m.heightfield_elevation_data = wp.zeros(1, dtype=wp.float32, device=device)
-            else:
-                from ..utils.heightfield import HeightfieldData, create_empty_heightfield_data  # noqa: PLC0415
 
-                empty_hfield = create_empty_heightfield_data()
-                m.shape_heightfield_data = wp.array(
-                    [empty_hfield] * max(len(self.shape_type), 1), dtype=HeightfieldData, device=device
-                )
-                m.heightfield_elevation_data = wp.zeros(1, dtype=wp.float32, device=device)
+            m.shape_heightfield_index = wp.array(
+                shape_heightfield_index if shape_heightfield_index else [-1],
+                dtype=wp.int32,
+                device=device,
+            )
+            m.heightfield_data = (
+                wp.array(compact_heightfield_data, dtype=HeightfieldData, device=device)
+                if compact_heightfield_data
+                else wp.array([create_empty_heightfield_data()], dtype=HeightfieldData, device=device)
+            )
+            m.heightfield_elevations = (
+                wp.array(np.concatenate(elevation_chunks), dtype=wp.float32, device=device)
+                if elevation_chunks
+                else wp.zeros(1, dtype=wp.float32, device=device)
+            )
+
+            # ---------------------
+            # mesh edges (packed array + per-shape slice)
+
+            shape_edge_ranges = []
+            edge_chunks = []
+            edge_offset = 0
+            edge_cache = {}  # mesh python id → (start, count)
+
+            for i in range(len(self.shape_type)):
+                if (
+                    self.shape_type[i] == GeoType.MESH
+                    and self.shape_source[i] is not None
+                    and (self.shape_flags[i] & ShapeFlags.COLLIDE_SHAPES)
+                ):
+                    mesh = self.shape_source[i]
+                    mesh_key = id(mesh)
+                    if mesh_key in edge_cache:
+                        shape_edge_ranges.append(edge_cache[mesh_key])
+                    else:
+                        edges = mesh.edges  # lazily computed and cached on the Mesh
+                        start = edge_offset
+                        count = len(edges)
+                        edge_chunks.append(edges)
+                        edge_offset += count
+                        entry = (start, count)
+                        edge_cache[mesh_key] = entry
+                        shape_edge_ranges.append(entry)
+                else:
+                    shape_edge_ranges.append((-1, 0))
+
+            m.shape_edge_range = wp.array(
+                shape_edge_ranges if shape_edge_ranges else [(-1, 0)],
+                dtype=wp.vec2i,
+                device=device,
+            )
+            m.mesh_edge_indices = (
+                wp.array(np.concatenate(edge_chunks), dtype=wp.vec2i, device=device)
+                if edge_chunks
+                else wp.zeros(1, dtype=wp.vec2i, device=device)
+            )
 
             # ---------------------
             # springs
@@ -9757,50 +10277,61 @@ class ModelBuilder:
             # rigid bodies
 
             # Apply inertia verification and correction
-            # This catches negative masses/inertias and other critical issues
+            # This catches negative masses/inertias and other critical issues.
+            # Neither path mutates the builder — corrected values only appear
+            # on the returned Model so that finalize() is side-effect-free.
             if len(self.body_mass) > 0:
                 if self.validate_inertia_detailed:
-                    # Use detailed Python validation with per-body warnings
+                    # Use detailed Python validation with per-body warnings.
+                    # Build corrected copies without modifying builder lists.
+                    corrected_mass = list(self.body_mass)
+                    corrected_inertia = list(self.body_inertia)
+                    corrected_inv_mass = list(self.body_inv_mass)
+                    corrected_inv_inertia = list(self.body_inv_inertia)
+
                     for i in range(len(self.body_mass)):
                         mass = self.body_mass[i]
                         inertia = self.body_inertia[i]
                         body_label = self.body_label[i] if i < len(self.body_label) else f"body_{i}"
 
-                        corrected_mass, corrected_inertia, was_corrected = verify_and_correct_inertia(
-                            mass, inertia, self.balance_inertia, self.bound_mass, self.bound_inertia, body_label
+                        new_mass, new_inertia, was_corrected = verify_and_correct_inertia(
+                            mass,
+                            inertia,
+                            self.balance_inertia,
+                            self.bound_mass,
+                            self.bound_inertia,
+                            body_label,
                         )
 
                         if was_corrected:
-                            self.body_mass[i] = corrected_mass
-                            self.body_inertia[i] = corrected_inertia
-                            # Update inverse mass and inertia
-                            if corrected_mass > 0.0:
-                                self.body_inv_mass[i] = 1.0 / corrected_mass
+                            corrected_mass[i] = new_mass
+                            corrected_inertia[i] = new_inertia
+                            if new_mass > 0.0:
+                                corrected_inv_mass[i] = 1.0 / new_mass
                             else:
-                                self.body_inv_mass[i] = 0.0
+                                corrected_inv_mass[i] = 0.0
 
-                            if any(x for x in corrected_inertia):
-                                self.body_inv_inertia[i] = wp.inverse(corrected_inertia)
+                            if any(x for x in new_inertia):
+                                corrected_inv_inertia[i] = wp.inverse(new_inertia)
                             else:
-                                self.body_inv_inertia[i] = corrected_inertia
+                                corrected_inv_inertia[i] = new_inertia
 
-                    # For detailed validation, create arrays from builder data (which were updated)
-                    m.body_mass = wp.array(self.body_mass, dtype=wp.float32, requires_grad=requires_grad)
-                    m.body_inv_mass = wp.array(self.body_inv_mass, dtype=wp.float32, requires_grad=requires_grad)
-                    m.body_inertia = wp.array(self.body_inertia, dtype=wp.mat33, requires_grad=requires_grad)
-                    m.body_inv_inertia = wp.array(self.body_inv_inertia, dtype=wp.mat33, requires_grad=requires_grad)
+                    # Create arrays from corrected copies
+                    m.body_mass = wp.array(corrected_mass, dtype=wp.float32, requires_grad=requires_grad)
+                    m.body_inv_mass = wp.array(corrected_inv_mass, dtype=wp.float32, requires_grad=requires_grad)
+                    m.body_inertia = wp.array(corrected_inertia, dtype=wp.mat33, requires_grad=requires_grad)
+                    m.body_inv_inertia = wp.array(corrected_inv_inertia, dtype=wp.mat33, requires_grad=requires_grad)
                 else:
                     # Use fast Warp kernel validation
-                    # First create arrays for the kernel
                     body_mass_array = wp.array(self.body_mass, dtype=wp.float32, requires_grad=requires_grad)
                     body_inertia_array = wp.array(self.body_inertia, dtype=wp.mat33, requires_grad=requires_grad)
                     body_inv_mass_array = wp.array(self.body_inv_mass, dtype=wp.float32, requires_grad=requires_grad)
                     body_inv_inertia_array = wp.array(
                         self.body_inv_inertia, dtype=wp.mat33, requires_grad=requires_grad
                     )
-                    correction_flags = wp.zeros(len(self.body_mass), dtype=wp.bool)
+                    correction_count = wp.zeros(1, dtype=wp.int32)
 
-                    # Launch validation kernel
+                    # Launch validation kernel (corrects arrays in-place on device)
                     wp.launch(
                         kernel=validate_and_correct_inertia_kernel,
                         dim=len(self.body_mass),
@@ -9812,12 +10343,12 @@ class ModelBuilder:
                             self.balance_inertia,
                             self.bound_mass if self.bound_mass is not None else 0.0,
                             self.bound_inertia if self.bound_inertia is not None else 0.0,
-                            correction_flags,
+                            correction_count,
                         ],
                     )
 
-                    # Check if any corrections were made
-                    num_corrections = int(np.sum(correction_flags.numpy()))
+                    # Check if any corrections were made (single int transfer)
+                    num_corrections = int(correction_count.numpy()[0])
                     if num_corrections > 0:
                         warnings.warn(
                             f"Inertia validation corrected {num_corrections} bodies. "
@@ -9825,8 +10356,9 @@ class ModelBuilder:
                             stacklevel=2,
                         )
 
-                    # Directly use the corrected arrays on the Model (avoids double allocation)
-                    # Note: This means the ModelBuilder's internal state is NOT updated for the fast path
+                    # Use the corrected arrays directly on the Model.
+                    # Builder state is intentionally left unchanged — corrected
+                    # values live only on the returned Model.
                     m.body_mass = body_mass_array
                     m.body_inv_mass = body_inv_mass_array
                     m.body_inertia = body_inertia_array
@@ -10001,18 +10533,49 @@ class ModelBuilder:
             )
 
             # Create actuators from accumulated entries
+            from ..actuators.actuator import Actuator  # noqa: PLC0415
+            from ..actuators.delay import Delay  # noqa: PLC0415
+
             m.actuators = []
-            for (actuator_class, scalar_key), entry in self.actuator_entries.items():
-                input_indices = self._build_index_array(entry.input_indices, device)
-                output_indices = self._build_index_array(entry.output_indices, device)
-                param_arrays = self._stack_args_to_arrays(entry.args, device=device, requires_grad=requires_grad)
-                scalar_params = dict(scalar_key)
-                actuator = actuator_class(
-                    input_indices=input_indices,
-                    output_indices=output_indices,
-                    **param_arrays,
-                    **scalar_params,
+            for entry in self.actuator_entries.values():
+                indices = self._build_index_array(entry.indices, device)
+
+                pos_indices_arg = None
+                if entry.pos_indices != entry.indices:
+                    pos_indices_arg = self._build_index_array(entry.pos_indices, device)
+
+                # Build controller from stacked per-DOF arrays + shared kwargs
+                ctrl_arrays = self._stack_args_to_arrays(
+                    entry.controller_args, device=device, requires_grad=requires_grad
                 )
+                controller = entry.controller_class(**ctrl_arrays, **entry.controller_shared_kwargs)
+
+                delay_obj = None
+                if entry.delay_args:
+                    delay_arrays = self._stack_args_to_arrays(entry.delay_args, device=device, default_dtype=wp.int32)
+                    max_delay = max(d["delay_steps"] for d in entry.delay_args)
+                    delay_obj = Delay(**delay_arrays, max_delay=max_delay)
+
+                # Build clamping objects from per-DOF arrays + shared kwargs
+                clamping_objs = []
+                for i, (comp_class, shared_kw) in enumerate(
+                    zip(entry.clamping_classes, entry.clamping_shared_kwargs, strict=True)
+                ):
+                    comp_args_per_actuator = [per_act[i] for per_act in entry.clamping_args]
+                    comp_arrays = self._stack_args_to_arrays(
+                        comp_args_per_actuator, device=device, requires_grad=requires_grad
+                    )
+                    clamping_objs.append(comp_class(**comp_arrays, **shared_kw))
+
+                actuator = Actuator(
+                    indices=indices,
+                    controller=controller,
+                    delay=delay_obj,
+                    clamping=clamping_objs if clamping_objs else None,
+                    pos_indices=pos_indices_arg,
+                    requires_grad=requires_grad,
+                )
+
                 m.actuators.append(actuator)
 
             # Add custom attributes onto the model (with lazy evaluation)

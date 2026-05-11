@@ -1,17 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import math
 import warnings
@@ -19,12 +7,16 @@ import warnings
 import numpy as np
 import warp as wp
 
-from ..geometry.raycast import sensor_raycast_kernel, sensor_raycast_particles_kernel
+from ..geometry.raycast import (
+    sensor_raycast_kernel,
+    sensor_raycast_kernel_no_hfield,
+    sensor_raycast_particles_kernel,
+)
 from ..sim import Model, State
 
 
 @wp.kernel
-def clamp_no_hits_kernel(depth_image: wp.array(dtype=float), max_dist: float):
+def clamp_no_hits_kernel(depth_image: wp.array[float], max_dist: float):
     """Kernel to replace max_distance values with -1.0 to indicate no intersection."""
     tid = wp.tid()
     if depth_image[tid] >= max_dist:
@@ -188,8 +180,12 @@ class SensorRaycast:
         # Launch raycast kernel for each pixel-shape combination
         # We use 3D launch with dimensions (width, height, num_shapes)
         if num_shapes > 0:
+            # Pick the lean (no-HFIELD) kernel variant when the scene has no
+            # heightfields, so non-HFIELD scenes don't pay the per-thread
+            # HeightfieldData overhead in the kernel body.
+            kernel = sensor_raycast_kernel if self.model.has_heightfields else sensor_raycast_kernel_no_hfield
             wp.launch(
-                kernel=sensor_raycast_kernel,
+                kernel=kernel,
                 dim=(self.width, self.height, num_shapes),
                 inputs=[
                     # Model data
@@ -199,6 +195,9 @@ class SensorRaycast:
                     self.model.shape_type,
                     self.model.shape_scale,
                     self.model.shape_source_ptr,
+                    self.model.shape_heightfield_index,
+                    self.model.heightfield_data,
+                    self.model.heightfield_elevations,
                     # Camera parameters
                     camera_position,
                     camera_direction,
