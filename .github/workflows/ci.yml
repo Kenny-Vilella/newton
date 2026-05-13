@@ -17,7 +17,7 @@ on:
 
 jobs:
   minimal-import-test:
-    if: github.event_name != 'push' || github.repository == 'newton-physics/newton'
+    if: github.event_name != 'push' || github.repository == 'Kenny-Vilella/newton'
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner

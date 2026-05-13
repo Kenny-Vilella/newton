@@ -26,7 +26,7 @@ on:
 jobs:
   start-runner:
     name: Start self-hosted EC2 runner
-    if: github.repository == 'newton-physics/newton'
+    if: github.repository == 'Kenny-Vilella/newton'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -182,7 +182,7 @@ jobs:
     needs:
       - start-runner
       - mujoco-warp-tests
-    if: always() && needs.start-runner.result != 'skipped' && github.repository == 'newton-physics/newton'
+    if: always() && needs.start-runner.result != 'skipped' && github.repository == 'Kenny-Vilella/newton'
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594  # v2.16.0

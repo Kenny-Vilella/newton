@@ -18,7 +18,7 @@ env:
 jobs:
   check-warp-update:
     name: Check for new warp-lang nightly build
-    if: github.repository == 'newton-physics/newton'
+    if: github.repository == 'Kenny-Vilella/newton'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,7 +57,7 @@ jobs:
   run-nightly-tests:
     name: Run nightly test suites
     needs: [check-warp-update]
-    if: ${{ !cancelled() && github.repository == 'newton-physics/newton' }}
+    if: ${{ !cancelled() && github.repository == 'Kenny-Vilella/newton' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180  # Budget for sequential dispatch+poll of all sub-workflows (typical total ~90 min)
     permissions:
