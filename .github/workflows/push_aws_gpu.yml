@@ -11,9 +11,12 @@ on:
       - "docs/**"
       - "**.md"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-tests:
-    if: github.repository == 'newton-physics/newton'
+    if: github.repository == 'Kenny-Vilella/newton'
     uses: ./.github/workflows/aws_gpu_tests.yml
     secrets: inherit
     permissions:
