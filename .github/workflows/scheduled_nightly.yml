@@ -12,6 +12,9 @@ on:
     - cron: '0 9 * * *'  # Daily at 9 AM UTC (1 AM PST / 2 AM PDT)
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   check-warp-update:
     name: Check for new warp-lang nightly build

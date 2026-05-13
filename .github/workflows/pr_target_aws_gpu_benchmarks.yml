@@ -3,6 +3,9 @@ name: Pull Request - AWS GPU Benchmarks
 on:
   pull_request_target:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true

@@ -12,6 +12,7 @@ env:
   AWS_ROLE_ARN: arn:aws:iam::968945269301:role/newton-physics-newton-ec2-github-runner-role
   AWS_ROLE_DURATION: 3600
   HOME: /actions-runner
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   workflow_call:
