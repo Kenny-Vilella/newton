@@ -3,6 +3,7 @@ permissions:
   contents: read
 env:
   PYTHONFAULTHANDLER: "1" # Dump tracebacks on fatal signals (SIGSEGV, SIGABRT, etc.)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   workflow_call:
@@ -16,7 +17,7 @@ on:
 
 jobs:
   minimal-import-test:
-    if: github.event_name != 'push' || github.repository == 'newton-physics/newton'
+    if: github.event_name != 'push' || github.repository == 'Kenny-Vilella/newton'
     runs-on: ubuntu-latest
     steps:
       - name: Harden Runner

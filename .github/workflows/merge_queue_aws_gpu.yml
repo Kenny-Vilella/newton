@@ -3,10 +3,13 @@ name: Merge Queue - AWS GPU
 on:
   merge_group:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-tests:
     name: Run GPU Tests
-    if: github.repository == 'newton-physics/newton'
+    if: github.repository == 'Kenny-Vilella/newton'
     uses: ./.github/workflows/aws_gpu_tests.yml
     with:
       ref: ${{ github.sha }}
