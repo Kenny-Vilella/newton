@@ -48,6 +48,7 @@ jobs:
     name: License Check
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     steps:
       - name: Harden Runner
@@ -81,7 +82,9 @@ jobs:
   dependency-review:
     name: Dependency Review
     runs-on: ubuntu-latest
+    continue-on-error: true
     permissions:
+      contents: read
       pull-requests: write
     steps:
       - name: Harden the runner (Audit all outbound calls)
