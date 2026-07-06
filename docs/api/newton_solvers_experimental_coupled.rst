@@ -17,9 +17,13 @@ Experimental coupled-solver framework.
 
 .. autoclass:: ModelView
 
+.. autoclass:: PhysxParseInfo
+
 .. autoclass:: SolverCoupled
 
 .. autoclass:: SolverCoupledADMM
 
 .. autoclass:: SolverCoupledProxy
+
+.. autoclass:: SolverPhysX
 

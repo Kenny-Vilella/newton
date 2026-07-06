@@ -489,6 +489,12 @@ class SolverCoupled(SolverBase, CouplingInterface):
                 for frequency, projection in attribute_projections.items()
             }
 
+            # Expose the entry's local<->global maps on the view so a solver that
+            # resolves names against the global parent can translate those global
+            # indices into the entry-local index space its coupled state/control
+            # arrays actually use.
+            object.__setattr__(view, "coupled_index_maps", index_maps)
+
             solver = cfg.solver(view)
             _require_supports_coupling(solver)
             self._entries[cfg.name] = SolverEntry(

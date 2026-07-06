@@ -11,11 +11,14 @@ from .model_view import ModelView
 from .solver_coupled import SolverCoupled
 from .solver_coupled_admm import SolverCoupledADMM
 from .solver_coupled_proxy import SolverCoupledProxy
+from .solver_physx import PhysxParseInfo, SolverPhysX
 
 __all__ = [
     "CouplingInterface",
     "ModelView",
+    "PhysxParseInfo",
     "SolverCoupled",
     "SolverCoupledADMM",
     "SolverCoupledProxy",
+    "SolverPhysX",
 ]

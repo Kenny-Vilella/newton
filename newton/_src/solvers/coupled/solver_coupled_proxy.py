@@ -237,6 +237,10 @@ class SolverCoupledProxy(SolverCoupled):
                 ``collision_pipeline``. ``None`` means every proxy pass when a
                 custom pipeline is supplied. Explicit values must be positive
                 integers.
+            destination_owned: When ``True``, ``proxy_bodies`` / ``proxy_particles``
+                may be ids the destination entry already owns and simulates.
+                The disjointness check against the destination's owned set
+                is skipped; the proxy still drives and harvests them normally.
         """
 
         source: str
@@ -255,6 +259,7 @@ class SolverCoupledProxy(SolverCoupled):
         proxy_particles: Sequence[int] | None = None
         collision_pipeline: Callable[[ModelView], object | None] | None = None
         collide_interval: int | None = None
+        destination_owned: bool = False
 
     @dataclass(frozen=True)
     class Config:
@@ -496,12 +501,13 @@ class SolverCoupledProxy(SolverCoupled):
                 proxy.source,
                 entry_joint_sets.get(proxy.source),
             )
-            self._validate_proxy_destination_ids_not_owned(
-                "joint",
-                proxy_local_ids,
-                proxy.destination,
-                entry_joint_sets.get(proxy.destination),
-            )
+            if not proxy.destination_owned:
+                self._validate_proxy_destination_ids_not_owned(
+                    "joint",
+                    proxy_local_ids,
+                    proxy.destination,
+                    entry_joint_sets.get(proxy.destination),
+                )
 
             source_visible_bodies = entry_body_sets.get(proxy.source)
             if source_visible_bodies is None:
@@ -610,12 +616,13 @@ class SolverCoupledProxy(SolverCoupled):
                 proxy.source,
                 entry_entity_sets.get(proxy.source),
             )
-            self._validate_proxy_destination_ids_not_owned(
-                entity_name,
-                proxy_local_ids,
-                proxy.destination,
-                entry_entity_sets.get(proxy.destination),
-            )
+            if not proxy.destination_owned:
+                self._validate_proxy_destination_ids_not_owned(
+                    entity_name,
+                    proxy_local_ids,
+                    proxy.destination,
+                    entry_entity_sets.get(proxy.destination),
+                )
             proxy_global_ids = proxy_local_ids
 
             source_local_to_proxy_local = [-1] * entity_count

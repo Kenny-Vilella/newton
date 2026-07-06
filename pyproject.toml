@@ -95,6 +95,12 @@ rtx = [
     "ovrtx>=0.3",           # NVIDIA OVRTX renderer
 ]
 
+# PhysX-backed coupled solver (SolverPhysX). GPU/CUDA-only; pulled in
+# separately from `dev` so non-GPU contributors don't install it.
+physx = [
+    "ovphysx>=0.4.0",       # NVIDIA Omniverse PhysX tensor API
+]
+
 # PyTorch is not required for ONNX policy inference. These extras cover
 # workflows that still need PyTorch explicitly, including .pt/.pth policies.
 torch-cu12 = [
