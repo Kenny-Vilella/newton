@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import warp as wp
 
-from newton import BodyFlags, StateFlags
+from newton import BodyFlags, ModelFlags, StateFlags
 from newton._src.solvers.coupled.interface import CouplingInterface
 from newton._src.solvers.solver import SolverBase
 
@@ -510,7 +510,7 @@ class SolverPhysX(SolverBase, CouplingInterface):
         usd_path: str,
         *,
         num_envs: int = 1,
-        pre_replicate_extend: "Callable[[ModelBuilder], None] | None" = None,
+        pre_replicate_extend: Callable[[ModelBuilder], None] | None = None,
         **parse_kwargs,
     ) -> PhysxParseInfo:
         """Load the PhysX scene in ``usd_path`` into ``builder`` and return the
@@ -578,7 +578,7 @@ class SolverPhysX(SolverBase, CouplingInterface):
         Returns:
             :class:`PhysxParseInfo` to hand to :meth:`__init__`.
         """
-        from pxr import Usd, UsdPhysics  # noqa: PLC0415
+        from pxr import Usd, UsdPhysics
 
         from newton._src.utils.import_usd import parse_usd as _newton_parse_usd  # noqa: PLC0415
 
@@ -614,9 +614,7 @@ class SolverPhysX(SolverBase, CouplingInterface):
         template_path_body_map = dict(parse_result.get("path_body_map", {}))
 
         usd_articulation_roots = tuple(
-            prim.GetPath().pathString
-            for prim in stage.Traverse()
-            if prim.HasAPI(UsdPhysics.ArticulationRootAPI)
+            prim.GetPath().pathString for prim in stage.Traverse() if prim.HasAPI(UsdPhysics.ArticulationRootAPI)
         )
 
         if single_env:
@@ -655,7 +653,7 @@ class SolverPhysX(SolverBase, CouplingInterface):
                 old_label = builder.body_label[new_b]
                 if not old_label or not old_label.startswith(template_root):
                     continue
-                new_label = env_root + old_label[len(template_root):]
+                new_label = env_root + old_label[len(template_root) :]
                 builder.body_label[new_b] = new_label
                 if old_label in template_path_body_map:
                     path_body_map[new_label] = new_b
@@ -663,10 +661,10 @@ class SolverPhysX(SolverBase, CouplingInterface):
                 old_jl = builder.joint_label[new_j]
                 if not old_jl or not old_jl.startswith(template_root):
                     continue
-                builder.joint_label[new_j] = env_root + old_jl[len(template_root):]
+                builder.joint_label[new_j] = env_root + old_jl[len(template_root) :]
             for art_root in usd_articulation_roots:
                 if art_root.startswith(template_root):
-                    env_articulation_roots.append(env_root + art_root[len(template_root):])
+                    env_articulation_roots.append(env_root + art_root[len(template_root) :])
 
         for s in range(pre_main_shape_count, builder.shape_count):
             builder.shape_collision_group[s] = 0
@@ -747,6 +745,12 @@ class SolverPhysX(SolverBase, CouplingInterface):
         _imaps = getattr(model, "coupled_index_maps", None)
         _body_g2l = _imaps.body_global_to_local.numpy() if _imaps is not None else None
         _dof_g2l = _imaps.joint_dof_global_to_local.numpy() if _imaps is not None else None
+        # Parent (global) -> view-local body map, retained so coupling hooks can
+        # read the framework's per-mirror effective-mass override off the view.
+        self._body_g2l = _body_g2l
+        # {mirror_label: (view_local_body_idx, source_com)}, populated by
+        # :meth:`finalize_coupling`; drives :meth:`_push_proxy_inertials`.
+        self._mirror_push_info: dict[str, tuple[int, np.ndarray]] = {}
 
         def _to_local_bodies(global_ids):
             if _body_g2l is None:
@@ -865,7 +869,9 @@ class SolverPhysX(SolverBase, CouplingInterface):
                 dof_newton_indices = _resolve_dof_indices(
                     root_path, dof_names, joint_labels, joint_qd_start, scope_prefix
                 )
-                dof_newton_indices_warp = wp.array(_to_local_dofs(dof_newton_indices), dtype=wp.int32, device=self.device)
+                dof_newton_indices_warp = wp.array(
+                    _to_local_dofs(dof_newton_indices), dtype=wp.int32, device=self.device
+                )
                 dof_gain_bindings = {
                     name: self._physx.create_tensor_binding(prim_paths=[root_path], tensor_type=t, raise_if_empty=True)
                     for name, t in gain_types.items()
@@ -1238,7 +1244,11 @@ class SolverPhysX(SolverBase, CouplingInterface):
         out_mass.zero_()
         # The effective-mass kernel always writes inertia
         # alias a scratch buffer when the caller wants mass only.
-        inertia = out_inertia if out_inertia is not None else wp.zeros(int(indices.shape[0]), dtype=wp.mat33, device=out_mass.device)
+        inertia = (
+            out_inertia
+            if out_inertia is not None
+            else wp.zeros(int(indices.shape[0]), dtype=wp.mat33, device=out_mass.device)
+        )
         inertia.zero_()
         body_mass = self.model.body_mass
         body_inertia = self.model.body_inertia
@@ -1253,7 +1263,6 @@ class SolverPhysX(SolverBase, CouplingInterface):
             body_idx = int(indices[slot])
             a_idx, link_idx = self._body_to_articulation.get(body_idx, (-1, -1))
             groups.setdefault(a_idx, []).append((slot, link_idx, body_idx))
-
 
         # Articulation path: compute the operational-space inertia
         intrinsic_slots: list[int] = []
@@ -1330,36 +1339,37 @@ class SolverPhysX(SolverBase, CouplingInterface):
         self,
         proxies: Sequence[SolverCoupledProxy.Proxy],
     ) -> None:
-        """Push source-body mass / inertia / COM onto SolverPhysX mirrors.
+        """Record each mirror's coupling inertials and push them to PhysX.
 
-        For each ``(source_idx, mirror_idx)`` pair in ``proxies`` where
-        ``mirror_idx`` names a SolverPhysX-owned body, reads
-        ``body_mass``, ``body_inertia``, and ``body_com`` from the
-        source body and writes them onto the PhysX-side mirror prim,
-        scaled by ``proxy.mass_scale``. Inertia is diagonalized; the
-        principal-axes rotation is encoded into the PhysX COM-pose
-        orientation. Coupling forces are derived by the framework's
-        default momentum-difference path — the source's harvest comes
-        from the mirror's actual integrated velocity change.
+        For each ``(source_idx, mirror_idx)`` pair in ``proxies`` whose
+        ``mirror_idx`` names a SolverPhysX-owned body, records the mirror's
+        view-local body index and the source-body COM, then writes the mirror
+        inertials via :meth:`_push_proxy_inertials`. Mass and inertia are read
+        from ``self.model`` — the coupling framework installs the source body's
+        *effective* (articulated, operational-space) mass there — so the
+        pose-driven mirror matches the source's interface impedance rather than
+        its raw link mass. COM comes from the source body, since the framework's
+        inertia override does not touch ``body_com``.
 
-        Pairs whose mirror is not SolverPhysX-owned are skipped (they
-        describe other solvers' destinations). Must be called after
-        :meth:`__init__` and before the first step.
+        Matching interface impedance is what keeps the explicit
+        source→mirror→source coupling loop stable under hard contact; using the
+        raw link mass leaves the loop under-damped and prone to blow-up.
 
-        Source-mass reads come from the parent ``Model`` stored by
-        ``__init__`` — *not* from ``self.model``, which is a filtered
-        view that does not contain the source-side bodies.
+        Pairs whose mirror is not SolverPhysX-owned are skipped (they describe
+        other solvers' destinations). Must be called after :meth:`__init__`
+        (once the framework has applied the effective-mass override) and before
+        the first step. Source COM is read from the parent ``Model`` — not from
+        ``self.model``, which does not contain the source-side bodies.
         """
         parent = self._parent_model
         body_labels = list(getattr(parent, "body_label", None) or [])
-        model_mass = parent.body_mass.numpy() if parent.body_mass is not None else None
-        model_inertia = parent.body_inertia.numpy() if parent.body_inertia is not None else None
         model_com = parent.body_com.numpy() if parent.body_com is not None else None
 
-        # Walk every (source_idx, mirror_idx) pair across all proxies;
-        # keep only the ones whose mirror is SolverPhysX-owned.
+        # Walk every (source_idx, mirror_idx) pair across all proxies; keep only
+        # the ones whose mirror is SolverPhysX-owned, resolving each mirror to
+        # its view-local index so the harvest can read the framework override.
+        self._mirror_push_info = {}
         for proxy in proxies:
-            mass_scale = float(getattr(proxy, "mass_scale", 1.0))
             for raw_source_idx, raw_mirror_idx in zip(proxy.bodies, proxy.proxy_bodies, strict=True):
                 source_idx = int(raw_source_idx)
                 mirror_idx = int(raw_mirror_idx)
@@ -1368,34 +1378,65 @@ class SolverPhysX(SolverBase, CouplingInterface):
                 mirror_label = body_labels[mirror_idx]
                 if not mirror_label or mirror_label not in self._owned_prims:
                     continue
-                if (
-                    model_mass is None
-                    or model_inertia is None
-                    or model_com is None
-                    or source_idx < 0
-                    or source_idx >= len(model_mass)
-                ):
+                if model_com is None or source_idx < 0 or source_idx >= len(model_com):
                     continue
-                mass = float(model_mass[source_idx]) * mass_scale
-                inertia = np.asarray(model_inertia[source_idx]) * mass_scale
-                com = np.asarray(model_com[source_idx])
-                moments, quat = _diagonalize_body_inertia(inertia)
-                diag_inertia = np.zeros(9, dtype=np.float32)
-                diag_inertia[0] = moments[0]
-                diag_inertia[4] = moments[1]
-                diag_inertia[8] = moments[2]
-                com_pose = np.asarray(
-                    [com[0], com[1], com[2], quat[0], quat[1], quat[2], quat[3]],
-                    dtype=np.float32,
-                )
-                mass_buf = wp.array([mass], dtype=wp.float32, device=self.device)
-                inertia_buf = wp.array([diag_inertia], dtype=wp.float32, device=self.device)
-                com_pose_buf = wp.array([com_pose], dtype=wp.float32, device=self.device)
-                # Write order matters: inertia first (resets COM
-                # orientation), COM-pose last.
-                self._one_shot_write(mirror_label, self._TensorType.RIGID_BODY_MASS, mass_buf)
-                self._one_shot_write(mirror_label, self._TensorType.RIGID_BODY_INERTIA, inertia_buf)
-                self._one_shot_write(mirror_label, self._TensorType.RIGID_BODY_COM_POSE, com_pose_buf)
+                local_idx = int(self._body_g2l[mirror_idx]) if self._body_g2l is not None else mirror_idx
+                if local_idx < 0:
+                    continue
+                self._mirror_push_info[mirror_label] = (local_idx, np.asarray(model_com[source_idx], dtype=np.float32))
+
+        self._push_proxy_inertials()
+
+    def _push_proxy_inertials(self) -> None:
+        """Write each mirror's effective mass / inertia / COM onto its PhysX prim.
+
+        Mass and inertia are read fresh from ``self.model`` (the framework's
+        effective-mass override, already scaled by ``proxy.mass_scale``); COM
+        comes from the source body cached in :attr:`_mirror_push_info`. Inertia
+        is diagonalized into PhysX's principal-moments + COM-pose-orientation
+        form. Idempotent, so it can re-run whenever the override changes (see
+        :meth:`notify_model_changed`).
+        """
+        if not self._mirror_push_info:
+            return
+        view_mass = self.model.body_mass.numpy() if self.model.body_mass is not None else None
+        view_inertia = self.model.body_inertia.numpy() if self.model.body_inertia is not None else None
+        if view_mass is None or view_inertia is None:
+            return
+        for mirror_label, (local_idx, com) in self._mirror_push_info.items():
+            if not (0 <= local_idx < len(view_mass)):
+                continue
+            mass = float(view_mass[local_idx])
+            inertia = np.asarray(view_inertia[local_idx])
+            moments, quat = _diagonalize_body_inertia(inertia)
+            diag_inertia = np.zeros(9, dtype=np.float32)
+            diag_inertia[0] = moments[0]
+            diag_inertia[4] = moments[1]
+            diag_inertia[8] = moments[2]
+            com_pose = np.asarray(
+                [com[0], com[1], com[2], quat[0], quat[1], quat[2], quat[3]],
+                dtype=np.float32,
+            )
+            mass_buf = wp.array([mass], dtype=wp.float32, device=self.device)
+            inertia_buf = wp.array([diag_inertia], dtype=wp.float32, device=self.device)
+            com_pose_buf = wp.array([com_pose], dtype=wp.float32, device=self.device)
+            # Write order matters: inertia first (resets COM orientation), COM-pose last.
+            self._one_shot_write(mirror_label, self._TensorType.RIGID_BODY_MASS, mass_buf)
+            self._one_shot_write(mirror_label, self._TensorType.RIGID_BODY_INERTIA, inertia_buf)
+            self._one_shot_write(mirror_label, self._TensorType.RIGID_BODY_COM_POSE, com_pose_buf)
+
+    def notify_model_changed(self, flags: int) -> None:
+        """Forward the framework's effective-mass override to the PhysX solver.
+
+        The coupling framework writes the source body's effective mass onto the
+        mirror bodies in ``self.model`` and calls this with
+        :attr:`~newton.ModelFlags.BODY_INERTIAL_PROPERTIES`; re-pushing those
+        inertials (see :meth:`_push_proxy_inertials`) is what delivers the
+        impedance match to ovphysx. A no-op before :meth:`finalize_coupling` has
+        recorded the mirror set.
+        """
+        if int(flags) & int(ModelFlags.BODY_INERTIAL_PROPERTIES):
+            self._push_proxy_inertials()
 
     def set_articulation_drive_gains(
         self,

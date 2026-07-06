@@ -251,14 +251,10 @@ class TestCouplingUnsupportedDeclaration(unittest.TestCase):
 
     def test_particle_proxy_harvest_declared_unsupported(self):
         # PhysX has no particles: the particle-harvest hook must opt out.
-        self.assertTrue(
-            _hook_raises_not_implemented(SolverPhysX.coupling_harvest_proxy_particle_forces, None, None)
-        )
+        self.assertTrue(_hook_raises_not_implemented(SolverPhysX.coupling_harvest_proxy_particle_forces, None, None))
 
     def test_body_proxy_harvest_not_declared_unsupported(self):
-        self.assertFalse(
-            _hook_raises_not_implemented(SolverPhysX.coupling_harvest_proxy_wrenches, None, None)
-        )
+        self.assertFalse(_hook_raises_not_implemented(SolverPhysX.coupling_harvest_proxy_wrenches, None, None))
 
     def test_effective_mass_block_not_declared_unsupported(self):
         self.assertFalse(
@@ -266,9 +262,7 @@ class TestCouplingUnsupportedDeclaration(unittest.TestCase):
         )
 
     def test_notify_input_state_update_not_declared_unsupported(self):
-        self.assertFalse(
-            _hook_raises_not_implemented(SolverPhysX.coupling_notify_input_state_update, None, 0)
-        )
+        self.assertFalse(_hook_raises_not_implemented(SolverPhysX.coupling_notify_input_state_update, None, 0))
 
 
 class TestApiSurface(unittest.TestCase):
@@ -681,6 +675,24 @@ _BALL_MJCF = """<mujoco>
 </mujoco>
 """
 
+# Articulated source: a floating base carrying a hinged child. The base link's
+# articulated (operational-space) effective mass exceeds its 1 kg intrinsic
+# mass because moving the base must also accelerate the child. Used to check
+# that the coupling framework's effective-mass override reaches ovphysx.
+_CHAIN_MJCF = """<mujoco>
+  <worldbody>
+    <body name="base" pos="0 0 5">
+      <freejoint/>
+      <geom type="sphere" size="0.1" mass="1"/>
+      <body name="child" pos="0.4 0 0">
+        <joint type="hinge" axis="0 1 0"/>
+        <geom type="sphere" size="0.1" mass="3"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
 
 def _mujoco_available() -> bool:
     try:
@@ -810,6 +822,130 @@ class TestLayer3MjwarpOvphysxCoupling(_PhysxIsolatedTestCase):
         self.assertTrue((body_qd == body_qd).all(), "body_qd contains NaN")
         # Positions within a generous sanity bound — no runaway explosion.
         self.assertTrue((abs(body_q) < 1e3).all(), "body_q out of bounds")
+
+
+@unittest.skipUnless(_CUDA, "Requires CUDA")
+class TestLayer3EffectiveMassReachesOvphysx(_PhysxIsolatedTestCase):
+    """Regression: the coupling framework's effective-mass override must reach
+    the ovphysx destination.
+
+    An articulated mjwarp source (floating base + hinged child) has a base-link
+    effective mass that differs from its intrinsic mass. The framework installs
+    that effective mass on the destination view and calls ``notify_model_changed``;
+    :meth:`SolverPhysX.finalize_coupling` and
+    :meth:`SolverPhysX.notify_model_changed` must forward it onto the ovphysx
+    mirror. Without this, the pose-driven mirror runs at the wrong impedance and
+    the explicit coupling loop diverges under hard contact (the mirror instead
+    keeps its raw intrinsic mass).
+    """
+
+    def setUp(self):
+        if not _OVPHYSX:
+            self.skipTest("ovphysx is not installed")
+        if not _MUJOCO:
+            self.skipTest("mujoco / SolverMuJoCo is not installed")
+
+        usd_path = _write_usda(_MJWARP_OVPHYSX_USDA)
+        mjcf_dir = tempfile.mkdtemp(prefix="solver_physx_chain_")
+        mjcf_path = os.path.join(mjcf_dir, "chain.mjcf")
+        with open(mjcf_path, "w") as f:
+            f.write(_CHAIN_MJCF)
+
+        builder = ModelBuilder()
+        from newton.solvers import SolverMuJoCo  # noqa: PLC0415
+
+        SolverMuJoCo.register_custom_attributes(builder)
+        self.parse_info = SolverPhysX.parse_usd(builder, usd_path)
+        pre = builder.body_count
+        builder.add_mjcf(mjcf_path)
+        self.mjwarp_body_indices = list(range(pre, builder.body_count))
+        self.base_body_idx = self.mjwarp_body_indices[0]  # floating base link
+        self.mirror_body_idx = self.parse_info.path_body_map["/World/Mirrors/ball_Mirror"]
+        self.ovphysx_body_indices = list(self.parse_info.path_body_map.values())
+        self.model = builder.finalize()
+        self.raw_base_mass = float(self.model.body_mass.numpy()[self.base_body_idx])
+
+        from newton.solvers.experimental.coupled import SolverCoupledProxy  # noqa: PLC0415
+
+        proxy = SolverCoupledProxy.Proxy(
+            source="mjwarp",
+            destination="ovphysx",
+            bodies=[self.base_body_idx],
+            proxy_bodies=[self.mirror_body_idx],
+            mass_scale=1.0,
+            mode="lagged",
+            destination_owned=True,
+        )
+        self.config = SolverCoupledProxy.Config(proxies=[proxy], iterations=1)
+        self.coupled_solver = SolverCoupledProxy(
+            model=self.model,
+            entries=[
+                SolverCoupledProxy.Entry(
+                    name="mjwarp",
+                    solver=lambda v: SolverMuJoCo(model=v, use_mujoco_contacts=False, njmax=16),
+                    bodies=self.mjwarp_body_indices,
+                    joints=list(range(self.model.joint_count)),
+                ),
+                SolverCoupledProxy.Entry(
+                    name="ovphysx",
+                    solver=lambda v: SolverPhysX(v, parse_info=self.parse_info),
+                    bodies=self.ovphysx_body_indices,
+                ),
+            ],
+            coupling=self.config,
+        )
+        self.ovphysx_solver = self.coupled_solver._entries["ovphysx"].solver
+
+        # The framework installs the effective mass on the destination view
+        # during construction; capture it and the mirror's view-local index.
+        view = self.ovphysx_solver.model
+        self.mirror_local = int(view.coupled_index_maps.body_global_to_local.numpy()[self.mirror_body_idx])
+        self.effective_mass = float(view.body_mass.numpy()[self.mirror_local])
+
+    def _read_ovphysx_mirror_mass(self) -> float:
+        from ovphysx.types import TensorType  # noqa: PLC0415
+
+        buf = wp.zeros(1, dtype=wp.float32, device=self.ovphysx_solver.device)
+        with self.ovphysx_solver._physx.create_tensor_binding(
+            prim_paths=["/World/Mirrors/ball_Mirror"],
+            tensor_type=TensorType.RIGID_BODY_MASS,
+            raise_if_empty=True,
+        ) as b:
+            b.read(buf)
+        return float(buf.numpy()[0])
+
+    def test_finalize_pushes_effective_mass_to_ovphysx(self):
+        # Sanity: articulation makes the effective mass differ from intrinsic;
+        # otherwise the test could not distinguish the two code paths.
+        self.assertGreater(
+            abs(self.effective_mass - self.raw_base_mass),
+            1e-3,
+            "articulated effective mass should differ from intrinsic base mass",
+        )
+        self.ovphysx_solver.finalize_coupling(self.config.proxies)
+        mirror_mass = self._read_ovphysx_mirror_mass()
+        # ovphysx must carry the effective mass, not the raw intrinsic mass.
+        self.assertAlmostEqual(mirror_mass, self.effective_mass, places=3)
+        self.assertNotAlmostEqual(mirror_mass, self.raw_base_mass, places=3)
+
+    def test_notify_model_changed_forwards_new_inertia(self):
+        from newton import ModelFlags  # noqa: PLC0415
+
+        self.ovphysx_solver.finalize_coupling(self.config.proxies)
+        # Mimic the framework installing a fresh effective mass on the view and
+        # notifying the solver: the update must propagate to ovphysx.
+        view = self.ovphysx_solver.model
+        new_mass = 7.5
+        indices = wp.array([self.mirror_local], dtype=wp.int32, device=view.device)
+        masses = wp.array([new_mass], dtype=wp.float32, device=view.device)
+        inertias = wp.array(
+            [wp.mat33(0.05, 0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.05)],
+            dtype=wp.mat33,
+            device=view.device,
+        )
+        view.set_body_inertial_properties(indices, masses, inertias)
+        self.ovphysx_solver.notify_model_changed(ModelFlags.BODY_INERTIAL_PROPERTIES)
+        self.assertAlmostEqual(self._read_ovphysx_mirror_mass(), new_mass, places=3)
 
 
 _BOX_FOR_MPM_USDA = """#usda 1.0
