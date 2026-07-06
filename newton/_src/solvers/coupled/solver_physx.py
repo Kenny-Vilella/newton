@@ -235,44 +235,6 @@ def _gather_intrinsic_inertia(
 
 
 @wp.kernel(enable_backward=False)
-def _rewind_proxy_body_velocity_kernel(
-    dt: float,
-    body_gravity_acceleration: wp.array[wp.vec3],
-    dst_body_q: wp.array[wp.transform],
-    dst_body_f: wp.array[wp.spatial_vector],
-    coupling_forces: wp.array[wp.spatial_vector],
-    body_local_to_proxy_global: wp.array[int],
-    dst_body_inv_mass: wp.array[float],
-    dst_body_inv_inertia: wp.array[wp.mat33],
-    dst_body_qd: wp.array[wp.spatial_vector],
-):
-    """Subtract lagged proxy feedback, force inputs, and gravity from the synced
-    proxy velocity before the PhysX solve. The synced velocity came from the
-    driving solver, which already accounted for those contributions.
-    """
-    local_id = wp.tid()
-    global_id = body_local_to_proxy_global[local_id]
-    if global_id < 0:
-        return
-
-    f = coupling_forces[global_id] + dst_body_f[local_id]
-
-    inv_m = dst_body_inv_mass[local_id]
-    r = wp.transform_get_rotation(dst_body_q[local_id])
-    inv_I = dst_body_inv_inertia[local_id]
-
-    delta_v = dt * inv_m * wp.spatial_top(f)
-    delta_w = dt * wp.quat_rotate(r, inv_I * wp.quat_rotate_inv(r, wp.spatial_bottom(f)))
-
-    g = body_gravity_acceleration[local_id]
-    delta_v_grav = wp.vec3(0.0, 0.0, 0.0)
-    if inv_m > 0.0:
-        delta_v_grav = dt * g
-
-    dst_body_qd[local_id] = dst_body_qd[local_id] - wp.spatial_vector(delta_v + delta_v_grav, delta_w)
-
-
-@wp.kernel(enable_backward=False)
 def _harvest_proxy_wrenches_kernel(
     dt: float,
     body_local_to_proxy_global: wp.array[int],
@@ -979,7 +941,7 @@ class SolverPhysX(SolverBase, CouplingInterface):
         # ovphysx time tracker.
         self._sim_time = 0.0
 
-        self._proxy_qd_before: wp.array | None = None
+        # Cached per-body gravity acceleration for the proxy harvest override.
         self._proxy_gravity_accel: wp.array | None = None
 
     def _proxy_body_gravity_acceleration(self, count: int) -> wp.array:
@@ -1000,39 +962,21 @@ class SolverPhysX(SolverBase, CouplingInterface):
         body_gravity_acceleration: wp.array[wp.vec3],
         dt: float,
     ) -> None:
-        """Rewind lagged feedback and gravity from the synced proxy velocity.
+        """No-op rewind: let PhysX apply full gravity to the mirror bodies.
 
-        Overrides the framework default (which pushes a gravity-compensating
-        body force into the destination) because PhysX does not honor that
-        push for pose-overridden bodies. Rewinding the velocity here, paired
-        with the analytic gravity subtraction in
-        :meth:`coupling_harvest_proxy_wrenches`, reproduces the robust
-        velocity-level coupling.
+        The framework default rewind pushes a gravity- and feedback-compensating
+        wrench into the destination's ``body_f`` before its solve, expecting the
+        destination to integrate that wrench so the harvested velocity change is
+        already gravity-free. PhysX *does* apply such a pushed wrench, so leaving
+        the default in place double-counts gravity once
+        :meth:`coupling_harvest_proxy_wrenches` also removes it analytically —
+        the mirror is over-supported and the coupled body diverges.
+
+        Overriding to a no-op leaves ``body_f`` cleared (PhysX applies plain
+        gravity) and the synced velocity untouched; the harvest then subtracts
+        gravity itself. This is the stable pairing for a PhysX destination.
         """
-        if body_local_to_proxy_global.shape[0] == 0 or state.body_qd is None:
-            return
-        model = self.model
-        wp.launch(
-            _rewind_proxy_body_velocity_kernel,
-            dim=body_local_to_proxy_global.shape[0],
-            inputs=[
-                float(dt),
-                body_gravity_acceleration,
-                state.body_q,
-                state.body_f,
-                coupling_forces,
-                body_local_to_proxy_global,
-                model.body_inv_mass,
-                model.body_inv_inertia,
-                state.body_qd,
-            ],
-            device=model.device,
-        )
-        # Snapshot the post-rewind velocity for the harvest. The framework's
-        # body_qd_before is captured before the rewind, so we keep our own.
-        if self._proxy_qd_before is None or self._proxy_qd_before.shape[0] != state.body_qd.shape[0]:
-            self._proxy_qd_before = wp.zeros_like(state.body_qd)
-        wp.copy(self._proxy_qd_before, state.body_qd)
+        del body_local_to_proxy_global, state, coupling_forces, body_gravity_acceleration, dt
 
     def coupling_harvest_proxy_wrenches(
         self,
@@ -1047,17 +991,21 @@ class SolverPhysX(SolverBase, CouplingInterface):
     ) -> None:
         """Harvest the contact reaction from the PhysX-side momentum change.
 
-        Subtracts gravity analytically rather than relying on the framework's
-        gravity-compensation push (which PhysX ignores for pose-overridden
-        bodies). Uses the post-rewind velocity snapshot taken in
-        :meth:`coupling_rewind_proxy_body`.
+        PhysX integrates the mirror under full gravity (see
+        :meth:`coupling_rewind_proxy_body`), so the momentum residual
+        ``m·(qd_after − qd_before)/dt`` contains gravity; subtract it
+        analytically to recover the contact reaction. ``qd_before`` is the
+        framework's pre-solve synced velocity. The result is written by
+        assignment (not accumulation): PhysX proxy mappings are 1:1, so each
+        global id is written once and ``coupling_forces`` holds the fresh
+        per-step reaction.
         """
-        del body_qd_before, contacts
+        del contacts
         n = body_local_to_proxy_global.shape[0]
         if n == 0:
             return
-        if state_out is None or state_out.body_qd is None or self._proxy_qd_before is None:
-            raise ValueError("SolverPhysX proxy harvest requires a prior rewind snapshot and state_out.body_qd")
+        if state_out is None or state_out.body_qd is None or body_qd_before is None:
+            raise ValueError("SolverPhysX proxy harvest requires body_qd_before and state_out.body_qd")
         if dt <= 0.0:
             raise ValueError("SolverPhysX proxy harvest requires dt > 0")
         model = self.model
@@ -1067,7 +1015,7 @@ class SolverPhysX(SolverBase, CouplingInterface):
             inputs=[
                 float(dt),
                 body_local_to_proxy_global,
-                self._proxy_qd_before,
+                body_qd_before,
                 state_out.body_qd,
                 state.body_f,
                 model.body_mass,
